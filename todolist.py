@@ -68,6 +68,41 @@ def local_to_utc(local_dt):
     """Convert local datetime object to UTC datetime object."""
     return local_dt.astimezone(timezone.utc)
 
+def parse_event_datetime(event, field='start', as_date=False):
+    """Parse datetime from a Google Calendar event field.
+    
+    Args:
+        event: The Google Calendar event dictionary
+        field: Field to parse (either 'start' or 'end')
+        as_date: If True, return just the date object instead of datetime
+        
+    Returns:
+        Datetime object with timezone information
+    """
+    if field not in event:
+        return datetime.now(timezone.utc)  # Fallback
+        
+    if 'dateTime' in event[field]:
+        # Regular event with specific time
+        dt = datetime.fromisoformat(event[field]['dateTime'].replace('Z', '+00:00'))
+        return dt.date() if as_date else dt
+    elif 'date' in event[field]:
+        # All-day event
+        local_date = datetime.fromisoformat(event[field]['date']).date()
+        if as_date:
+            return local_date
+            
+        # For all-day events, start is beginning of day, end is end of day
+        if field == 'start':
+            local_dt = datetime.combine(local_date, datetime.min.time())
+        else:  # field == 'end'
+            local_dt = datetime.combine(local_date, datetime.max.time())
+            
+        # Make timezone-aware
+        return local_dt.astimezone().astimezone(timezone.utc)
+        
+    return datetime.now(timezone.utc)  # Fallback
+
 
 # GOOGLE API CLASSES
 class GoogleAuthService:
@@ -344,12 +379,7 @@ class CalendarManager:
     
     def _get_event_start_datetime(self, event):
         """Extract start datetime from an event object."""
-        if 'dateTime' in event.get('start', {}):
-            return datetime.fromisoformat(event['start']['dateTime'].replace('Z', '+00:00'))
-        elif 'date' in event.get('start', {}):
-            # All-day event
-            return datetime.fromisoformat(event['start']['date']).replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc)  # Fallback
+        return parse_event_datetime(event, field='start')
     
     def clear_cache_for_month(self, year, month):
         """Clear the cache for a specific month to force refresh."""
@@ -1027,24 +1057,8 @@ class TodoAppUI(ctk.CTk):
                 
             # Process event start time
             try:
-                if 'dateTime' in event['start']:
-                    start_dt = datetime.fromisoformat(event['start']['dateTime'].replace("Z", "+00:00"))
-                else: # Handle all-day events
-                    # Assuming all-day events start at the beginning of the day in local time
-                    local_date = datetime.fromisoformat(event['start']['date']).date()
-                    local_start_of_day = datetime.combine(local_date, datetime.min.time())
-                    # Make it timezone-aware using the system's local timezone
-                    start_dt = local_start_of_day.astimezone().astimezone(timezone.utc)
-
-                # Process event end time
-                if 'dateTime' in event['end']:
-                    end_dt = datetime.fromisoformat(event['end']['dateTime'].replace("Z", "+00:00"))
-                else: # Handle all-day events end time
-                    # Assuming all-day events end at the end of the start day
-                    local_date = datetime.fromisoformat(event['start']['date']).date()
-                    local_end_of_day = datetime.combine(local_date, datetime.max.time())
-                    # Make it timezone-aware
-                    end_dt = local_end_of_day.astimezone().astimezone(timezone.utc)
+                start_dt = parse_event_datetime(event, field='start')
+                end_dt = parse_event_datetime(event, field='end')
 
                 # Create task from event
                 task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
@@ -1513,11 +1527,7 @@ class TodoAppUI(ctk.CTk):
         for event in events:
             try:
                 # Extract the event date (in local time)
-                if 'dateTime' in event['start']:
-                    event_dt = datetime.fromisoformat(event['start']['dateTime'].replace("Z", "+00:00"))
-                else:
-                    event_dt = datetime.fromisoformat(event['start']['date'])
-                    
+                event_dt = parse_event_datetime(event, field='start')
                 local_date = event_dt.astimezone().date()
                 
                 # Skip events not in the displayed month (could happen with recurring events)
@@ -1529,19 +1539,8 @@ class TodoAppUI(ctk.CTk):
                     tasks_by_date[local_date] = []
                     
                 # Create task from event
-                if 'dateTime' in event['start']:
-                    start_dt = datetime.fromisoformat(event['start']['dateTime'].replace("Z", "+00:00"))
-                else:
-                    # Handle all-day events
-                    local_start_of_day = datetime.combine(local_date, datetime.min.time())
-                    start_dt = local_start_of_day.astimezone().astimezone(timezone.utc)
-
-                if 'dateTime' in event['end']:
-                    end_dt = datetime.fromisoformat(event['end']['dateTime'].replace("Z", "+00:00"))
-                else:
-                    # Handle all-day events end time
-                    local_end_of_day = datetime.combine(local_date, datetime.max.time())
-                    end_dt = local_end_of_day.astimezone().astimezone(timezone.utc)
+                start_dt = parse_event_datetime(event, field='start')
+                end_dt = parse_event_datetime(event, field='end')
                     
                 task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
                 tasks_by_date[local_date].append(task)
@@ -1645,11 +1644,7 @@ class TodoAppUI(ctk.CTk):
             for event in events:
                 try:
                     # Extract the event date (in local time)
-                    if 'dateTime' in event['start']:
-                        event_dt = datetime.fromisoformat(event['start']['dateTime'].replace("Z", "+00:00"))
-                    else:
-                        event_dt = datetime.fromisoformat(event['start']['date'])
-                        
+                    event_dt = parse_event_datetime(event, field='start')
                     local_date = event_dt.astimezone().date()
                     
                     # Only process events for this month
@@ -1661,19 +1656,8 @@ class TodoAppUI(ctk.CTk):
                         tasks_by_date[local_date] = []
                         
                     # Create task from event
-                    if 'dateTime' in event['start']:
-                        start_dt = datetime.fromisoformat(event['start']['dateTime'].replace("Z", "+00:00"))
-                    else:
-                        # Handle all-day events
-                        local_start_of_day = datetime.combine(local_date, datetime.min.time())
-                        start_dt = local_start_of_day.astimezone().astimezone(timezone.utc)
-
-                    if 'dateTime' in event['end']:
-                        end_dt = datetime.fromisoformat(event['end']['dateTime'].replace("Z", "+00:00"))
-                    else:
-                        # Handle all-day events end time
-                        local_end_of_day = datetime.combine(local_date, datetime.max.time())
-                        end_dt = local_end_of_day.astimezone().astimezone(timezone.utc)
+                    start_dt = parse_event_datetime(event, field='start')
+                    end_dt = parse_event_datetime(event, field='end')
                         
                     task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
                     tasks_by_date[local_date].append(task)
