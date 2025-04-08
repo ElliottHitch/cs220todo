@@ -137,11 +137,19 @@ class GoogleAuthService:
         self.creds = None
         # Time buffer in seconds before expiration to trigger refresh (default 5 minutes)
         self.refresh_buffer = 300
+        self.service = None  # Cache for the calendar service object
 
     def get_calendar_service(self):
-        """Get an authenticated Google Calendar service."""
+        """Get an authenticated Google Calendar service.
+        Returns cached service if available, only recreating when needed."""
+        if self.service is not None:
+            # Return cached service if we already have one
+            return self.service
+            
+        # Create a new service if we don't have one yet
         creds = self._get_credentials()
-        return build('calendar', 'v3', credentials=creds)
+        self.service = build('calendar', 'v3', credentials=creds)
+        return self.service
 
     def _get_credentials(self):
         """Get valid credentials, refreshing or creating them if necessary."""
@@ -162,6 +170,8 @@ class GoogleAuthService:
             creds = flow.run_local_server(port=0)
         with open(self.token_file, 'w') as token_file:
             token_file.write(creds.to_json())
+        # Invalidate the service cache when credentials change
+        self.service = None
         return creds
         
     def auto_refresh_token(self):
@@ -172,6 +182,7 @@ class GoogleAuthService:
         """
         if not self.creds:
             self.creds = self._get_credentials()
+            self.service = None  # Invalidate service cache since credentials changed
             return True
             
         # Check if token exists and will expire soon
@@ -191,6 +202,7 @@ class GoogleAuthService:
                 print(f"Token will expire soon ({time_until_expiry:.1f} seconds). Refreshing...")
                 try:
                     self.creds = self._refresh_credentials(self.creds)
+                    self.service = None  # Invalidate service cache since credentials changed
                     return True
                 except Exception as e:
                     print(f"Error refreshing token: {str(e)}")
