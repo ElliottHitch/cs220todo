@@ -14,20 +14,19 @@ import queue
 
 
 # Set calendar to use Sunday as the first day of the week
-calendar.setfirstweekday(6)  # 6 corresponds to Sunday in the calendar module
-# CONSTANTS AND STYLING
+calendar.setfirstweekday(6)
+
 # API Configuration
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 TOKEN_FILE = 'token.json'
 CREDENTIALS_FILE = 'credentials.json'
 
-
 # Color Theme
-BACKGROUND_COLOR = "#1E1E2F"   # Dark background       
-NAV_BG_COLOR = "#2A2A3B"       # navigation bar background
-DROPDOWN_BG_COLOR = "#252639"  # dialog/dropdown background
-CARD_COLOR = "#1F6AA5"         # task card background (matches button blue)
-TEXT_COLOR = "#E0E0E0"         # Light text
+BACKGROUND_COLOR = "#1E1E2F"    
+NAV_BG_COLOR = "#2A2A3B"       
+DROPDOWN_BG_COLOR = "#252639"  
+CARD_COLOR = "#1F6AA5"        
+TEXT_COLOR = "#E0E0E0"        
 
 # Fonts
 FONT_HEADER = ("Helvetica Neue", 18, "bold")
@@ -69,39 +68,19 @@ def local_to_utc(local_dt):
     return local_dt.astimezone(timezone.utc)
 
 def format_task_time(start_dt, end_dt):
-    """Format task start and end time consistently.
-    
-    Args:
-        start_dt: Start datetime (UTC)
-        end_dt: End datetime (UTC)
-        
-    Returns:
-        str: Formatted time string (e.g. "9:00 AM - 10:00 AM" or "All Day")
-    """
-    # Convert to local timezone
+    """Format task start and end time consistently."""
     local_start = start_dt.astimezone()
     local_end = end_dt.astimezone()
     
-    # Check if it's an all-day event
     if local_start.hour == 0 and local_start.minute == 0 and local_end.hour == 23 and local_end.minute == 59:
         return "All Day"
     else:
-        # Format times in 12-hour format with AM/PM
         start_str = local_start.strftime('%I:%M %p').lstrip('0')
         end_str = local_end.strftime('%I:%M %p').lstrip('0')
         return f"{start_str} - {end_str}"
 
 def parse_event_datetime(event, field='start', as_date=False):
-    """Parse datetime from a Google Calendar event field.
-    
-    Args:
-        event: The Google Calendar event dictionary
-        field: Field to parse (either 'start' or 'end')
-        as_date: If True, return just the date object instead of datetime
-        
-    Returns:
-        Datetime object with timezone information
-    """
+    """Parse datetime from a Google Calendar event field."""
     if field not in event:
         return datetime.now(timezone.utc)  # Fallback
         
@@ -135,18 +114,14 @@ class GoogleAuthService:
         self.token_file = token_file
         self.credentials_file = credentials_file
         self.creds = None
-        # Time buffer in seconds before expiration to trigger refresh (default 5 minutes)
         self.refresh_buffer = 300
-        self.service = None  # Cache for the calendar service object
+        self.service = None
 
     def get_calendar_service(self):
-        """Get an authenticated Google Calendar service.
-        Returns cached service if available, only recreating when needed."""
+        """Get an authenticated Google Calendar service."""
         if self.service is not None:
-            # Return cached service if we already have one
             return self.service
             
-        # Create a new service if we don't have one yet
         creds = self._get_credentials()
         self.service = build('calendar', 'v3', credentials=creds)
         return self.service
@@ -170,39 +145,30 @@ class GoogleAuthService:
             creds = flow.run_local_server(port=0)
         with open(self.token_file, 'w') as token_file:
             token_file.write(creds.to_json())
-        # Invalidate the service cache when credentials change
         self.service = None
         return creds
         
     def auto_refresh_token(self):
-        """Check if token is about to expire and refresh it proactively.
-        
-        Returns:
-            bool: True if token was refreshed, False otherwise
-        """
+        """Check if token is about to expire and refresh it proactively."""
         if not self.creds:
             self.creds = self._get_credentials()
-            self.service = None  # Invalidate service cache since credentials changed
+            self.service = None
             return True
             
-        # Check if token exists and will expire soon
         if self.creds and hasattr(self.creds, 'expiry'):
-            # Calculate time until expiration
             now = datetime.now(timezone.utc)
             if self.creds.expiry and self.creds.expiry.tzinfo is None:
-                # Convert naive datetime to aware datetime
                 expiry = self.creds.expiry.replace(tzinfo=timezone.utc)
             else:
                 expiry = self.creds.expiry
                 
-            # If token will expire within buffer time, refresh it
             time_until_expiry = (expiry - now).total_seconds() if expiry else 0
             
             if time_until_expiry < self.refresh_buffer:
                 print(f"Token will expire soon ({time_until_expiry:.1f} seconds). Refreshing...")
                 try:
                     self.creds = self._refresh_credentials(self.creds)
-                    self.service = None  # Invalidate service cache since credentials changed
+                    self.service = None
                     return True
                 except Exception as e:
                     print(f"Error refreshing token: {str(e)}")
@@ -216,40 +182,25 @@ class CalendarManager:
     def __init__(self, auth_service):
         self.auth_service = auth_service
         self.service = self.auth_service.get_calendar_service()
-        self.holiday_cache = {}  # Cache for holidays {(year, month): {date: holiday_name}}
-        self.event_cache = {}    # Cache for events {(year, month): [events]}
-        self.fetch_lock = threading.Lock()  # Lock for thread safety
-        self.fetching_ranges = set()  # Track which date ranges are currently being fetched
+        self.holiday_cache = {}
+        self.event_cache = {}
+        self.fetch_lock = threading.Lock()
+        self.fetching_ranges = set()
     
     def _ensure_valid_token(self):
         """Ensure the token is valid before making API calls."""
         try:
-            # Check if token needs refreshing
             refreshed = self.auth_service.auto_refresh_token()
             if refreshed:
-                # Re-initialize the service with the refreshed token
                 self.service = self.auth_service.get_calendar_service()
         except Exception as e:
             print(f"Error ensuring valid token: {str(e)}")
 
     def fetch_events(self, calendar_id='primary', max_results=50, page_token=None, 
                      start_date=None, end_date=None):
-        """Fetch events from Google Calendar with pagination support.
-        
-        Args:
-            calendar_id: ID of the calendar to fetch from
-            max_results: Maximum number of results per page
-            page_token: Token for pagination
-            start_date: Optional start date to filter by (datetime)
-            end_date: Optional end date to filter by (datetime)
-            
-        Returns:
-            Tuple of (events list, next_page_token)
-        """
-        # Ensure valid token before making API call
+        """Fetch events from Google Calendar with pagination support."""
         self._ensure_valid_token()
         
-        # Set time range
         if not start_date:
             start_date = datetime.now(timezone.utc)
         
@@ -258,7 +209,6 @@ class CalendarManager:
         if end_date:
             time_max = end_date.isoformat().replace('+00:00', 'Z')
         
-        # Build the request parameters
         params = {
             'calendarId': calendar_id,
             'maxResults': max_results,
@@ -274,10 +224,8 @@ class CalendarManager:
             params['pageToken'] = page_token
         
         try:
-            # Execute the request
             events_result = self.service.events().list(**params).execute()
             
-            # Get the events and next page token
             events = events_result.get('items', [])
             next_token = events_result.get('nextPageToken')
             
@@ -287,71 +235,49 @@ class CalendarManager:
             return [], None
     
     def fetch_events_for_range(self, start_date, end_date, calendar_id='primary'):
-        """Fetch all events within a date range, using the cache if available.
-        
-        Args:
-            start_date: Start date (datetime)
-            end_date: End date (datetime)
-            calendar_id: ID of the calendar to fetch from
-            
-        Returns:
-            List of event items in the range
-        """
-        # Convert to datetime objects if strings
+        """Fetch all events within a date range, using the cache if available."""
         if isinstance(start_date, str):
             start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
         if isinstance(end_date, str):
             end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
         
-        # Create a unique identifier for this date range
         range_id = (calendar_id, start_date.isoformat(), end_date.isoformat())
         
-        # Check if we're already fetching this range
         with self.fetch_lock:
             if range_id in self.fetching_ranges:
-                return []  # Avoid duplicate fetches
+                return []
             self.fetching_ranges.add(range_id)
         
         try:
-            # Ensure valid token before potential API calls
             self._ensure_valid_token()
             
-            # Generate month keys for all months in the range
             month_keys = self._get_month_keys_in_range(start_date, end_date)
             
-            # Check if all months are cached
             all_cached = all(key in self.event_cache for key in month_keys)
             
             if all_cached:
-                # Get events from cache and filter by date range
                 return self._get_cached_events_in_range(month_keys, start_date, end_date)
             
-            # Identify which months need to be fetched
             uncached_months = [key for key in month_keys if key not in self.event_cache]
             
-            # Get cached events for the cached months
             cached_events = self._get_cached_events_in_range(
                 [key for key in month_keys if key in self.event_cache], 
                 start_date, 
                 end_date
             )
             
-            # Fetch only the uncached months
             new_events = []
             for month_key in uncached_months:
                 year, month = month_key
-                # Calculate start and end date for this month
                 month_start = datetime(year, month, 1, tzinfo=timezone.utc)
                 if month == 12:
                     month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
                 else:
                     month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
                 
-                # Adjust to requested date range if needed
                 fetch_start = max(month_start, start_date)
                 fetch_end = min(month_end, end_date)
                 
-                # Fetch events for this month
                 month_events = []
                 next_token = None
                 
@@ -369,15 +295,12 @@ class CalendarManager:
                         
                     month_events.extend(batch)
                     
-                    # Break if no more pages
                     if not next_token:
                         break
                 
-                # Update cache with these events
                 self._update_cache_with_events(month_events)
                 new_events.extend(month_events)
             
-            # Merge cached and new events, avoiding duplicates
             all_events = cached_events.copy()
             existing_ids = {event.get('id') for event in cached_events if event.get('id')}
             
@@ -393,7 +316,6 @@ class CalendarManager:
             print(f"Error fetching events for range: {str(e)}")
             return []
         finally:
-            # Remove from fetching set
             with self.fetch_lock:
                 self.fetching_ranges.discard(range_id)
     
@@ -434,18 +356,14 @@ class CalendarManager:
                 event_start = self._get_event_start_datetime(event)
                 month_key = (event_start.year, event_start.month)
                 
-                # Initialize cache for this month if needed
                 if month_key not in self.event_cache:
                     self.event_cache[month_key] = []
                     
-                # Check if event already exists in cache
                 event_id = event.get('id')
                 if event_id:
-                    # Remove existing event with same ID if present
                     self.event_cache[month_key] = [e for e in self.event_cache[month_key] 
                                                   if e.get('id') != event_id]
                     
-                # Add event to cache
                 self.event_cache[month_key].append(event)
     
     def _get_event_start_datetime(self, event):
@@ -461,7 +379,6 @@ class CalendarManager:
 
     def add_event(self, calendar_id, event):
         """Add a new event to Google Calendar."""
-        # Ensure valid token before making API call
         self._ensure_valid_token()
         
         try:
@@ -470,7 +387,6 @@ class CalendarManager:
                 body=event
             ).execute()
             
-            # Update cache with the new event
             self._update_cache_with_events([result])
             return result
         except Exception as e:
@@ -479,7 +395,6 @@ class CalendarManager:
 
     def update_event(self, calendar_id, event_id, updated_event):
         """Update an existing event in Google Calendar."""
-        # Ensure valid token before making API call
         self._ensure_valid_token()
         
         try:
@@ -489,7 +404,6 @@ class CalendarManager:
                 body=updated_event
             ).execute()
             
-            # Update cache with the updated event
             self._update_cache_with_events([result])
             return result
         except Exception as e:
@@ -498,7 +412,6 @@ class CalendarManager:
 
     def delete_event(self, calendar_id, event_id):
         """Delete an event from Google Calendar."""
-        # Ensure valid token before making API call
         self._ensure_valid_token()
         
         try:
@@ -507,7 +420,6 @@ class CalendarManager:
                 eventId=event_id
             ).execute()
             
-            # Remove event from cache
             with self.fetch_lock:
                 for month_events in self.event_cache.values():
                     for i, event in enumerate(month_events):
@@ -522,32 +434,25 @@ class CalendarManager:
 
     def fetch_holidays(self, year, month):
         """Fetch holidays for a specific month from Google Calendar."""
-        # Ensure valid token before making API call
         self._ensure_valid_token()
         
-        # Check cache first
         cache_key = (year, month)
         if cache_key in self.holiday_cache:
             return self.holiday_cache[cache_key]
             
         try:
-            # Public holiday calendar ID for US holidays
             holiday_calendar_id = 'en.usa#holiday@group.v.calendar.google.com'
             
-            # Calculate time range for the month
             start_date = datetime(year, month, 1, tzinfo=timezone.utc)
-            # Calculate last day of month
             if month == 12:
                 end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
             else:
                 end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
             end_date = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=timezone.utc)
             
-            # Format dates for API request
             time_min = start_date.isoformat().replace('+00:00', 'Z')
             time_max = end_date.isoformat().replace('+00:00', 'Z')
             
-            # Call Google Calendar API to get holidays
             holidays_result = self.service.events().list(
                 calendarId=holiday_calendar_id,
                 timeMin=time_min,
@@ -556,28 +461,26 @@ class CalendarManager:
                 orderBy='startTime'
             ).execute()
             
-            # Process the holidays
             holidays = {}
             for item in holidays_result.get('items', []):
-                if 'date' in item['start']:  # All-day event (typical for holidays)
+                if 'date' in item['start']:
                     event_date = datetime.fromisoformat(item['start']['date']).date()
                     holidays[event_date] = item['summary']
                     
-            # Cache the results
             self.holiday_cache[cache_key] = holidays
             return holidays
             
         except Exception as e:
             print(f"Error fetching holidays: {str(e)}")
-            return {}  # Return empty dict on error
+            return {}
 
 # TASK AND REMINDER CLASSES
 class Task:
     """Represents a task/event with start and end times."""
     def __init__(self, summary, start_dt, end_dt, task_id=None, reminder_minutes=10, status='Pending'):
         self.summary = summary
-        self.start_dt = start_dt  # datetime (UTC)
-        self.end_dt = end_dt      # datetime (UTC)
+        self.start_dt = start_dt
+        self.end_dt = end_dt
         self.task_id = task_id
         self.reminder_minutes = reminder_minutes
         self.status = status
@@ -586,7 +489,7 @@ class ReminderManager:
     """Manages task reminders and notifications."""
     def __init__(self, root):
         self.root = root
-        self.reminders = []  # List of Task objects
+        self.reminders = []
 
     def add_reminder(self, task):
         """Add a task to the reminder list."""
@@ -597,7 +500,6 @@ class ReminderManager:
         now = datetime.now(timezone.utc)
         for task in self.reminders:
             if task.status == 'Pending' and (task.start_dt - now) <= timedelta(minutes=task.reminder_minutes) and (task.start_dt - now) > timedelta(0):
-                # Use the shared time formatting function
                 time_str = format_task_time(task.start_dt, task.end_dt)
                 self.root.show_alert(f"Reminder: {task.summary} at {time_str}", alert_type="info", duration=5000)
         self.root.after(60000, self.check_reminders)
@@ -612,45 +514,36 @@ class TaskDialog(ctk.CTkToplevel):
         self.title("Task Dialog")
         self.configure(fg_color=DROPDOWN_BG_COLOR)
         
-        # Position the dialog near the center of the parent window
         if master:
             parent_x = master.winfo_rootx()
             parent_y = master.winfo_rooty()
             parent_width = master.winfo_width()
             parent_height = master.winfo_height()
             
-            # Calculate position (centered on parent)
             self.dialog_width = 400
             self.dialog_height = 500
             x_pos = parent_x + (parent_width - self.dialog_width) // 2
             y_pos = parent_y + (parent_height - self.dialog_height) // 2
             
-            # Set window size and position
             self.geometry(f"{self.dialog_width}x{self.dialog_height}+{x_pos}+{y_pos}")
             
-        # Set up initial time values
         self.setup_initial_time()
         
-        # Build the UI after a short delay to improve responsiveness
         self.after(10, self.build_widgets)
         
     def setup_initial_time(self):
         """Set up initial time values."""
-        self.initial_hour = 9  # Default to 9 AM
+        self.initial_hour = 9
         self.initial_min = 0
         self.initial_period = "AM"
         
-        # If editing task, extract its time
         if self.task:
-            # Get task time (local)
             local_start = self.task.start_dt.astimezone()
             local_end = self.task.end_dt.astimezone()
             
-            # Convert to 12-hour format for later use
             self.initial_hour, self.initial_period = convert_from_24(str(local_start.hour))
             self.initial_min = local_start.minute
         else:
-            # Set to next hour if creating new task
             now = datetime.now()
             next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
             hour_12, period = convert_from_24(str(next_hour.hour))
@@ -660,12 +553,10 @@ class TaskDialog(ctk.CTkToplevel):
 
     def build_widgets(self):
         """Create and arrange all dialog widgets."""
-        # Header
         header_text = "Edit Task" if self.task else "Add New Task"
         header = ctk.CTkLabel(self, text=header_text, font=FONT_HEADER, text_color=TEXT_COLOR)
         header.pack(pady=PADDING)
 
-        # Task Summary Entry
         summary_label = ctk.CTkLabel(self, text="Task Summary:", font=FONT_LABEL, text_color=TEXT_COLOR)
         summary_label.pack(pady=(5, 0))
         self.summary_entry = ctk.CTkEntry(self, font=FONT_LABEL)
@@ -673,15 +564,12 @@ class TaskDialog(ctk.CTkToplevel):
             self.summary_entry.insert(0, self.task.summary)
         self.summary_entry.pack(pady=5, padx=20, fill="x")
 
-        # Date Picker
         self.calendar = Calendar(self, date_pattern="y-mm-dd")
         self.calendar.pack(pady=5)
 
-        # Time Selector
         time_frame = ctk.CTkFrame(self, fg_color=DROPDOWN_BG_COLOR)
         time_frame.pack(pady=5)
 
-        # Start Time
         start_label = ctk.CTkLabel(time_frame, text="Start Time (HH:MM):", font=FONT_LABEL, text_color=TEXT_COLOR)
         start_label.grid(row=0, column=0, padx=5, pady=5)
         self.start_hour = Spinbox(time_frame, from_=1, to=12, width=4, format="%02.0f", command=self._update_end_time)
@@ -692,7 +580,6 @@ class TaskDialog(ctk.CTkToplevel):
         self.start_period.set(self.initial_period)
         self.start_period.grid(row=0, column=3, padx=5, pady=5)
 
-        # End Time
         end_label = ctk.CTkLabel(time_frame, text="End Time (HH:MM):", font=FONT_LABEL, text_color=TEXT_COLOR)
         end_label.grid(row=1, column=0, padx=5, pady=5)
         self.end_hour = Spinbox(time_frame, from_=1, to=12, width=4, format="%02.0f")
@@ -703,29 +590,23 @@ class TaskDialog(ctk.CTkToplevel):
         self.end_period.set(self.initial_period)
         self.end_period.grid(row=1, column=3, padx=5, pady=5)
 
-        # Set up event bindings for automatic end time updates
         self.start_hour.bind("<KeyRelease>", self._update_end_time)
         self.start_min.bind("<KeyRelease>", self._update_end_time)
         self.start_period.configure(command=self._update_end_time)
 
-        # Initialize time fields if editing existing task
         if self.task:
             self._init_time_fields()
         else:
-            # Set start time to initial values
             self.start_hour.delete(0, "end")
             self.start_hour.insert(0, f"{self.initial_hour:02d}")
             self.start_min.delete(0, "end")
             self.start_min.insert(0, f"{self.initial_min:02d}")
             
-            # Set end time to one hour after start
             self._update_end_time()
 
-        # Action Buttons
         btn_frame = ctk.CTkFrame(self, fg_color=DROPDOWN_BG_COLOR)
         btn_frame.pack(pady=PADDING)
         
-        # Add Delete button if editing existing task
         if self.task and self.task.task_id:
             delete_btn = ctk.CTkButton(
                 btn_frame, 
@@ -749,7 +630,6 @@ class TaskDialog(ctk.CTkToplevel):
     def delete_task(self):
         """Delete the current task."""
         if self.task and self.task.task_id:
-            # Confirm deletion
             if hasattr(self.master, 'delete_task'):
                 self.master.delete_task(self.task)
             self.destroy()
@@ -757,40 +637,31 @@ class TaskDialog(ctk.CTkToplevel):
     def _update_end_time(self, event=None):
         """Update end time to be 1 hour after start time."""
         try:
-            # Get start time values
             start_hour = int(self.start_hour.get())
             start_min = int(self.start_min.get())
             start_period = self.start_period.get()
             
-            # Convert to 24-hour format
             start_hour_24 = convert_to_24(str(start_hour), start_period)
             
-            # Calculate end time (1 hour later)
             end_hour_24 = (start_hour_24 + 1) % 24
             
-            # Convert back to 12-hour format
             end_hour_12, end_period = convert_from_24(str(end_hour_24))
             
-            # Update end time fields
             self.end_hour.delete(0, "end")
             self.end_hour.insert(0, f"{end_hour_12:02d}")
             self.end_min.delete(0, "end")
             self.end_min.insert(0, f"{start_min:02d}")
             self.end_period.set(end_period)
         except (ValueError, TypeError):
-            # Handle any conversion errors silently
             pass
 
     def _init_time_fields(self):
         """Initialize time fields when editing an existing task."""
-        # Convert UTC to local time
         local_start = self.task.start_dt.astimezone()
         local_end = self.task.end_dt.astimezone()
         
-        # Set the calendar date
         self.calendar.selection_set(local_start.date())
         
-        # Set start time
         start_hour, start_period = convert_from_24(str(local_start.hour))
         self.start_hour.delete(0, "end")
         self.start_hour.insert(0, f"{start_hour:02d}")
@@ -798,7 +669,6 @@ class TaskDialog(ctk.CTkToplevel):
         self.start_min.insert(0, f"{local_start.minute:02d}")
         self.start_period.set(start_period)
         
-        # Set end time
         end_hour, end_period = convert_from_24(str(local_end.hour))
         self.end_hour.delete(0, "end")
         self.end_hour.insert(0, f"{end_hour:02d}")
@@ -808,20 +678,16 @@ class TaskDialog(ctk.CTkToplevel):
 
     def confirm(self):
         """Validate input and create/update task."""
-        # Validate task summary
         summary = self.summary_entry.get().strip()
         if not summary:
             self.master.show_alert("Task summary cannot be empty.", alert_type="error", duration=4000)
             return
 
-        # Get and validate date/time
         date_str = self.calendar.get_date()
         try:
-            # Convert time format
             start_hour_24 = convert_to_24(self.start_hour.get(), self.start_period.get())
             end_hour_24 = convert_to_24(self.end_hour.get(), self.end_period.get())
             
-            # Create datetime objects
             local_tz = datetime.now().astimezone().tzinfo
             start_dt_local = datetime.strptime(f"{date_str} {start_hour_24:02d}:{self.start_min.get()}", "%Y-%m-%d %H:%M")
             start_dt_local = start_dt_local.replace(tzinfo=local_tz)
@@ -831,7 +697,6 @@ class TaskDialog(ctk.CTkToplevel):
             end_dt_local = end_dt_local.replace(tzinfo=local_tz)
             end_dt = local_to_utc(end_dt_local)
             
-            # Validate time range
             if end_dt <= start_dt:
                 self.master.show_alert("End time must be after start time.", alert_type="error", duration=4000)
                 return
@@ -839,7 +704,6 @@ class TaskDialog(ctk.CTkToplevel):
             self.master.show_alert(f"Invalid date or time: {str(e)}", alert_type="error", duration=4000)
             return
 
-        # Update or create task
         if self.task:
             self.task.summary = summary
             self.task.start_dt = start_dt
@@ -854,62 +718,49 @@ class TaskDialog(ctk.CTkToplevel):
 class TodoAppUI(ctk.CTk):
     """Main application UI class for the To-Do List application."""
     
-    # Initialization and Setup
     def __init__(self, calendar_manager):
         super().__init__()
         self.calendar_manager = calendar_manager
         
-        # Application setup
         self.title("To-Do List")
         self.geometry("1200x1000")
         self.configure(fg_color=BACKGROUND_COLOR)
         
-        # State variables
         self.task_list = []
         self.current_view = "daily"
         
-        # Monthly view state
         today = datetime.now().date()
         self.displayed_year = today.year
         self.displayed_month = today.month
         
-        # Performance optimization
-        self.task_cache = {}  # Format: {(year, month): tasks_by_date_dict}
-        self.preload_active = False  # Flag to prevent multiple preload operations
-        self.ui_dirty = True         # Flag to indicate if UI needs refresh
-        self.loading = False         # Loading state
-        self.worker = APIWorker(self) # Background worker thread
+        self.task_cache = {}
+        self.preload_active = False
+        self.ui_dirty = True
+        self.loading = False
+        self.worker = APIWorker(self)
         
-        # Initialize components
         self.reminder_manager = ReminderManager(self)
         self.monthly_view_frame = None
         self.content_frame = None
         self.calendar_cells = {}
-        self.rendered_days = set()   # Track which days have been rendered to avoid duplicate rendering
+        self.rendered_days = set()
 
-        # Set up UI components
         self._setup_alert_area()
         self._setup_navbar()
         self._setup_main_layout()
         
-        # Initialize data and start periodic tasks
         self.refresh_events()
         self.reminder_manager.check_reminders()
         
-        # Set up periodic UI check
         self.after(100, self._check_scroll_position)
         
-        # Set up token refresh checker (check every 10 minutes)
         self.check_token_refresh()
         
-        # Set up window close handler
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         
-    # Add this new method
     def check_token_refresh(self):
         """Periodically check if token needs refresh and schedule next check."""
         try:
-            # Access the auth_service through calendar_manager
             if hasattr(self.calendar_manager, 'auth_service'):
                 refreshed = self.calendar_manager.auth_service.auto_refresh_token()
                 if refreshed:
@@ -917,15 +768,12 @@ class TodoAppUI(ctk.CTk):
         except Exception as e:
             print(f"Error checking token refresh: {str(e)}")
         finally:
-            # Check again in 10 minutes (600000 ms)
             self.after(600000, self.check_token_refresh)
         
     def _on_close(self):
         """Clean up resources before closing."""
-        # Stop the worker thread
         if hasattr(self, 'worker'):
             self.worker.stop()
-        # Destroy the window
         self.destroy()
         
     def show_loading(self, is_loading):
@@ -953,37 +801,23 @@ class TodoAppUI(ctk.CTk):
         self.alert_frame.pack(fill="x")
         self.alert_label = ctk.CTkLabel(self.alert_frame, text="", font=FONT_LABEL, text_color=TEXT_COLOR)
         self.alert_label.pack(side="left", padx=20, pady=5)
-        self.alert_frame.pack_forget()  # Hide initially
+        self.alert_frame.pack_forget()
 
     def _check_scroll_position(self):
-        """
-        Periodic check for UI maintenance.
-        Currently just maintains the schedule for potential future rendering needs.
-        """
-        # Render any pending tasks if we want to do this periodically
-        # self._render_pending_tasks()
-        
-        # Schedule next check
+        """Periodic check for UI maintenance."""
         self.after(200, self._check_scroll_position)
     
     def _render_pending_tasks(self, visible_top=None, visible_bottom=None, canvas_height=None):
-        """
-        Helper function to render all days in expanded month containers that haven't been rendered yet.
-        Parameters are kept for backward compatibility but are no longer used.
-        """
+        """Helper function to render all days in expanded month containers that haven't been rendered yet."""
         if not hasattr(self, 'month_containers') or not self.month_containers:
             return
             
-        # Simply render all days that aren't already rendered
         for month_key, month_data in self.month_containers.items():
-            # Skip if month is collapsed (not expanded)
             if not month_data.get('expanded', False):
                 continue
                 
-            # Render all days in this month
             for day_key, day_data in month_data.get('days', {}).items():
                 if day_key not in self.rendered_days and not day_data.get('rendered', False):
-                    # Render this day
                     self._render_day(month_key, day_key, day_data)
     
     def _render_day(self, month_key, day_key, day_data):
@@ -994,11 +828,9 @@ class TodoAppUI(ctk.CTk):
         parent_frame = day_data.get('frame')
         tasks = day_data.get('tasks', [])
         
-        # Mark as rendered
         day_data['rendered'] = True
         self.rendered_days.add(day_key)
         
-        # Add tasks to the container
         tasks_container = day_data.get('container')
         if tasks_container:
             for task in tasks:
@@ -1008,27 +840,22 @@ class TodoAppUI(ctk.CTk):
         """Refresh events from Google Calendar using background thread."""
         self.ui_dirty = True
         
-        # Define the callbacks
         def on_events_loaded(result):
             events, next_token = result
             if events:
                 self._process_loaded_events(events)
             
-            # If there are more pages, fetch them in the background
             if next_token:
                 self._fetch_next_page(next_token)
             else:
-                # All data loaded, update the UI
                 self._update_current_view()
         
         def on_error(error):
             self.show_alert(f"Error loading events: {str(error)}", alert_type="error", duration=5000)
-            self._update_current_view()  # Update UI anyway to show what we have
+            self._update_current_view()
         
-        # Start date for fetching (today)
         start_date = datetime.now(timezone.utc)
         
-        # Queue the API call in the worker thread
         self.worker.add_task(
             "fetch_events",
             self.calendar_manager.fetch_events,
@@ -1046,11 +873,9 @@ class TodoAppUI(ctk.CTk):
             if events:
                 self._process_loaded_events(events)
             
-            # If there are more pages, fetch them
             if next_token:
                 self._fetch_next_page(next_token)
             else:
-                # All pages loaded, update the UI
                 self._update_current_view()
         
         def on_error(error):
@@ -2232,15 +2057,7 @@ class APIWorker:
         self.thread.start()
         
     def add_task(self, task_type, func, callback=None, error_callback=None, **kwargs):
-        """Add a task to the queue.
-        
-        Args:
-            task_type: String identifier for the type of task
-            func: Function to call
-            callback: Function to call with the result
-            error_callback: Function to call if an error occurs
-            **kwargs: Arguments to pass to func
-        """
+        """Add a task to the queue."""
         self.queue.put((task_type, func, callback, error_callback, kwargs))
         
     def _worker_loop(self):
@@ -2250,23 +2067,18 @@ class APIWorker:
                 task_type, func, callback, error_callback, kwargs = self.queue.get(timeout=0.5)
                 
                 try:
-                    # Show loading indicator in UI
                     if task_type not in ['background_fetch', 'preload']:
                         self.parent.after(0, lambda: self.parent.show_loading(True))
                     
-                    # Execute the function
                     result = func(**kwargs)
                     
-                    # Call the callback in the main thread
                     if callback:
-                        # Create a local copy of the callback and result to avoid closure issues
-                        cb = callback  # Create a local reference that won't change
-                        res = result   # Create a local reference to the result
+                        cb = callback
+                        res = result
                         self.parent.after(0, lambda cb=cb, res=res: cb(res))
                         
                 except Exception as e:
                     print(f"Error in worker thread ({task_type}): {str(e)}")
-                    # Call the error callback in the main thread
                     if error_callback:
                         # Create a local copy of the error callback and error to avoid closure issues
                         err_cb = error_callback
