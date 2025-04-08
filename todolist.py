@@ -885,7 +885,7 @@ class TodoAppUI(ctk.CTk):
         self.monthly_view_frame = None
         self.content_frame = None
         self.calendar_cells = {}
-        self.rendered_days = set()   # Track which days have been rendered in daily view
+        self.rendered_days = set()   # Track which days have been rendered to avoid duplicate rendering
 
         # Set up UI components
         self._setup_alert_area()
@@ -896,7 +896,7 @@ class TodoAppUI(ctk.CTk):
         self.refresh_events()
         self.reminder_manager.check_reminders()
         
-        # Set up virtual rendering checker for scrollable content
+        # Set up periodic UI check
         self.after(100, self._check_scroll_position)
         
         # Set up token refresh checker (check every 10 minutes)
@@ -956,63 +956,38 @@ class TodoAppUI(ctk.CTk):
         self.alert_frame.pack_forget()  # Hide initially
 
     def _check_scroll_position(self):
-        """Check scroll position to implement virtual rendering."""
-        if self.current_view == "daily" and hasattr(self, 'content_frame'):
-            try:
-                # Get visible region
-                visible_top = self.content_frame._parent_canvas.yview()[0]
-                visible_bottom = self.content_frame._parent_canvas.yview()[1]
-                canvas_height = self.content_frame._parent_canvas.winfo_height()
-                
-                # Only render items in or near the visible area
-                self._update_virtual_rendering(visible_top, visible_bottom, canvas_height)
-            except Exception as e:
-                print(f"Error checking scroll position: {str(e)}")
-                
+        """
+        Periodic check for UI maintenance.
+        Currently just maintains the schedule for potential future rendering needs.
+        """
+        # Render any pending tasks if we want to do this periodically
+        # self._render_pending_tasks()
+        
         # Schedule next check
         self.after(200, self._check_scroll_position)
-        
-    def _update_virtual_rendering(self, visible_top, visible_bottom, canvas_height):
-        """Update which days are rendered based on scroll position."""
+    
+    def _render_pending_tasks(self, visible_top=None, visible_bottom=None, canvas_height=None):
+        """
+        Helper function to render all days in expanded month containers that haven't been rendered yet.
+        Parameters are kept for backward compatibility but are no longer used.
+        """
         if not hasattr(self, 'month_containers') or not self.month_containers:
             return
             
-        # Convert fraction to actual pixels
-        total_height = self.content_frame._parent_canvas.bbox("all")[3]
-        visible_top_px = visible_top * total_height
-        visible_bottom_px = visible_bottom * total_height
-        
-        # Add buffer zone (render a bit above and below visible area)
-        buffer = canvas_height * 0.5
-        render_top = max(0, visible_top_px - buffer)
-        render_bottom = min(total_height, visible_bottom_px + buffer)
-        
+        # Simply render all days that aren't already rendered
         for month_key, month_data in self.month_containers.items():
-            month_frame = month_data.get('frame')
-            if not month_frame:
+            # Skip if month is collapsed (not expanded)
+            if not month_data.get('expanded', False):
                 continue
                 
-            # Get position of this month container
-            try:
-                frame_y = month_frame.winfo_y()
-                frame_height = month_frame.winfo_height()
-                
-                # Check if frame is in or near visible area
-                if frame_y + frame_height < render_top or frame_y > render_bottom:
-                    # Skip rendering days for this month - it's not visible
-                    continue
-                    
-                # Render days for this month if not already rendered
-                for day_key, day_data in month_data.get('days', {}).items():
-                    if day_key not in self.rendered_days and not day_data.get('rendered', False):
-                        # Render this day
-                        self._render_day(month_key, day_key, day_data)
-            except Exception:
-                # Frame might not be mapped yet
-                continue
-        
+            # Render all days in this month
+            for day_key, day_data in month_data.get('days', {}).items():
+                if day_key not in self.rendered_days and not day_data.get('rendered', False):
+                    # Render this day
+                    self._render_day(month_key, day_key, day_data)
+    
     def _render_day(self, month_key, day_key, day_data):
-        """Actually render a day's content."""
+        """Render a day's content."""
         if not day_data.get('frame') or not day_data.get('tasks'):
             return
             
@@ -1150,7 +1125,7 @@ class TodoAppUI(ctk.CTk):
             self._update_current_view()
 
     def build_daily_view(self, search_term=""):
-        """Build the daily view with efficient rendering for visible content."""
+        """Build the daily view with all tasks rendered for expanded months."""
         # Clear tracking variables
         self.rendered_days = set()
         self.month_containers = {}
@@ -1249,7 +1224,7 @@ class TodoAppUI(ctk.CTk):
                 month_container = ctk.CTkFrame(self.content_frame, fg_color=BACKGROUND_COLOR)
                 month_container.pack(fill="x", padx=0, pady=0)
                 
-                # Track days in this month container for virtual rendering
+                # Track days in this month container
                 month_days = {}
                 self.month_containers[month_key] = {
                     'frame': month_container,
@@ -1292,7 +1267,7 @@ class TodoAppUI(ctk.CTk):
             tasks_container = ctk.CTkFrame(day_frame, fg_color=BACKGROUND_COLOR)
             tasks_container.pack(side="left", fill="x", expand=True)
             
-            # Store day data for lazy rendering
+            # Store day data for rendering
             month_key = (day.year, day.month)
             day_key = str(day)
             
@@ -1303,7 +1278,8 @@ class TodoAppUI(ctk.CTk):
                 'rendered': False
             }
             
-            # Only render tasks for visible days or current month
+            # Render tasks for visible/expanded months or when searching
+            is_current_month = (day.year == current_date.year and day.month == current_date.month)
             if is_current_month or search_term:
                 self._render_day(month_key, day_key, self.month_containers[month_key]['days'][day_key])
     
@@ -1330,7 +1306,7 @@ class TodoAppUI(ctk.CTk):
         if separator_frame.is_expanded:
             separator_frame.month_container.pack(fill="x", padx=0, pady=0, after=separator_frame)
             
-            # Render days that are now visible
+            # Render all days that aren't already rendered
             if hasattr(separator_frame, 'month_key') and separator_frame.month_key in self.month_containers:
                 month_data = self.month_containers[separator_frame.month_key]
                 for day_key, day_data in month_data.get('days', {}).items():
