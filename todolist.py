@@ -739,6 +739,9 @@ class TodoAppUI(ctk.CTk):
         self.loading = False
         self.worker = APIWorker(self)
         
+        # Add lock for thread safety
+        self.data_lock = threading.Lock()
+        
         self.reminder_manager = ReminderManager(self)
         self.monthly_view_frame = None
         self.content_frame = None
@@ -812,12 +815,15 @@ class TodoAppUI(ctk.CTk):
         if not hasattr(self, 'month_containers') or not self.month_containers:
             return
             
+        with self.data_lock:
+            rendered_days_copy = self.rendered_days.copy()
+            
         for month_key, month_data in self.month_containers.items():
             if not month_data.get('expanded', False):
                 continue
                 
             for day_key, day_data in month_data.get('days', {}).items():
-                if day_key not in self.rendered_days and not day_data.get('rendered', False):
+                if day_key not in rendered_days_copy and not day_data.get('rendered', False):
                     self._render_day(month_key, day_key, day_data)
     
     def _render_day(self, month_key, day_key, day_data):
@@ -829,7 +835,8 @@ class TodoAppUI(ctk.CTk):
         tasks = day_data.get('tasks', [])
         
         day_data['rendered'] = True
-        self.rendered_days.add(day_key)
+        with self.data_lock:
+            self.rendered_days.add(day_key)
         
         tasks_container = day_data.get('container')
         if tasks_container:
@@ -909,8 +916,11 @@ class TodoAppUI(ctk.CTk):
     def _process_loaded_events(self, events):
         """Process loaded events and update the task list and cache."""
         # Add events to task list (avoid duplicates)
-        existing_ids = {task.task_id for task in self.task_list if task.task_id}
+        with self.data_lock:
+            existing_ids = {task.task_id for task in self.task_list if task.task_id}
+        
         added_count = 0
+        new_tasks = []
         
         for event in events:
             event_id = event.get('id')
@@ -924,10 +934,20 @@ class TodoAppUI(ctk.CTk):
 
                 # Create task from event
                 task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
-                self.task_list.append(task)
+                new_tasks.append(task)
                 added_count += 1
                 
-                # Add to cache by date
+                # Add to reminders
+                self.reminder_manager.add_reminder(task)
+            except Exception as e:
+                print(f"Error processing event: {str(e)}")
+        
+        # Update shared data structures with lock
+        with self.data_lock:
+            self.task_list.extend(new_tasks)
+            
+            # Update cache by date
+            for task in new_tasks:
                 local_date = task.start_dt.astimezone().date()
                 year_month = (local_date.year, local_date.month)
                 
@@ -939,11 +959,6 @@ class TodoAppUI(ctk.CTk):
                     
                 # Add task to cache
                 self.task_cache[year_month][local_date].append(task)
-                
-                # Add task to reminders
-                self.reminder_manager.add_reminder(task)
-            except Exception as e:
-                print(f"Error processing event: {str(e)}")
         
         # Only update UI if we've added events and UI needs updating
         if added_count > 0 and self.ui_dirty:
@@ -1326,12 +1341,17 @@ class TodoAppUI(ctk.CTk):
             
         def on_delete_success(result):
             self.show_alert(f"Task deleted", duration=3000)
-            # Remove from local list
-            self.task_list = [t for t in self.task_list if t.task_id != task.task_id]
-            # Remove from cache
-            for month_data in self.task_cache.values():
-                for date, tasks in list(month_data.items()):
-                    month_data[date] = [t for t in tasks if t.task_id != task.task_id]
+            
+            # Remove from local list and cache with thread safety
+            with self.data_lock:
+                # Remove from local list
+                self.task_list = [t for t in self.task_list if t.task_id != task.task_id]
+                
+                # Remove from cache
+                for month_data in self.task_cache.values():
+                    for date, tasks in list(month_data.items()):
+                        month_data[date] = [t for t in tasks if t.task_id != task.task_id]
+            
             # Refresh the current view
             if self.current_view == "daily":
                 self.build_daily_view()
@@ -1353,21 +1373,22 @@ class TodoAppUI(ctk.CTk):
 
     def get_filtered_tasks_by_date(self, search_term=""):
         """Get tasks filtered by search term, organized by date."""
-        tasks_by_date = self._get_tasks_by_date_dict()
+        with self.data_lock:
+            tasks_by_date = self._get_tasks_by_date_dict()
         
-        if search_term:
-            filtered = {}
-            search_term = search_term.lower()
-            
-            for date, tasks in tasks_by_date.items():
-                matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
+            if search_term:
+                filtered = {}
+                search_term = search_term.lower()
                 
-                if matching_tasks:
-                    filtered[date] = matching_tasks
+                for date, tasks in tasks_by_date.items():
+                    matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
+                    
+                    if matching_tasks:
+                        filtered[date] = matching_tasks
+                
+                return filtered
             
-            return filtered
-        
-        return tasks_by_date
+            return tasks_by_date
     
     def _get_tasks_by_date_dict(self):
         """Get tasks organized by date from the task list."""
@@ -1402,8 +1423,9 @@ class TodoAppUI(ctk.CTk):
             # Process events into tasks by date
             tasks_by_date = self._process_events_for_monthly_view(events)
                 
-            # Store in cache
-            self.task_cache[(self.displayed_year, self.displayed_month)] = tasks_by_date
+            # Store in cache with thread safety
+            with self.data_lock:
+                self.task_cache[(self.displayed_year, self.displayed_month)] = tasks_by_date
             
             # Update the UI with these tasks
             self._update_calendar_cells(tasks_by_date, search_term)
@@ -1414,9 +1436,12 @@ class TodoAppUI(ctk.CTk):
         # Check if we have cached data for this month
         month_key = (self.displayed_year, self.displayed_month)
         
-        if month_key in self.task_cache:
+        with self.data_lock:
+            has_cached_data = month_key in self.task_cache
+            tasks_by_date = self.task_cache.get(month_key, {})
+        
+        if has_cached_data:
             # Use cached data
-            tasks_by_date = self.task_cache[month_key]
             self._update_calendar_cells(tasks_by_date, search_term)
         else:
             # Calculate date range for the month
@@ -1526,12 +1551,17 @@ class TodoAppUI(ctk.CTk):
             next_month_key = (next_year, next_month)
             prev_month_key = (prev_year, prev_month)
             
+            # Check cache with thread safety
+            with self.data_lock:
+                next_month_cached = next_month_key in self.task_cache
+                prev_month_cached = prev_month_key in self.task_cache
+            
             # Preload next month if not cached
-            if next_month_key not in self.task_cache:
+            if not next_month_cached:
                 self._preload_month_data(next_year, next_month)
             
             # Preload previous month if not cached
-            if prev_month_key not in self.task_cache:
+            if not prev_month_cached:
                 self._preload_month_data(prev_year, prev_month)
                 
         except Exception as e:
@@ -1582,8 +1612,9 @@ class TodoAppUI(ctk.CTk):
                 except Exception as e:
                     print(f"Error processing preloaded event: {str(e)}")
             
-            # Store in cache for future use
-            self.task_cache[(year, month)] = tasks_by_date
+            # Store in cache for future use with thread safety
+            with self.data_lock:
+                self.task_cache[(year, month)] = tasks_by_date
         
         def on_error(error):
             print(f"Error preloading data for {month}/{year}: {str(error)}")
@@ -1996,12 +2027,17 @@ class TodoAppUI(ctk.CTk):
             
         def on_delete_success(result):
             self.show_alert(f"Task deleted", duration=3000)
-            # Remove from local list
-            self.task_list = [t for t in self.task_list if t.task_id != task.task_id]
-            # Remove from cache
-            for month_data in self.task_cache.values():
-                for date, tasks in list(month_data.items()):
-                    month_data[date] = [t for t in tasks if t.task_id != task.task_id]
+            
+            # Remove from local list and cache with thread safety
+            with self.data_lock:
+                # Remove from local list
+                self.task_list = [t for t in self.task_list if t.task_id != task.task_id]
+                
+                # Remove from cache
+                for month_data in self.task_cache.values():
+                    for date, tasks in list(month_data.items()):
+                        month_data[date] = [t for t in tasks if t.task_id != task.task_id]
+            
             # Refresh the current view
             if self.current_view == "daily":
                 self.build_daily_view()
