@@ -68,6 +68,29 @@ def local_to_utc(local_dt):
     """Convert local datetime object to UTC datetime object."""
     return local_dt.astimezone(timezone.utc)
 
+def format_task_time(start_dt, end_dt):
+    """Format task start and end time consistently.
+    
+    Args:
+        start_dt: Start datetime (UTC)
+        end_dt: End datetime (UTC)
+        
+    Returns:
+        str: Formatted time string (e.g. "9:00 AM - 10:00 AM" or "All Day")
+    """
+    # Convert to local timezone
+    local_start = start_dt.astimezone()
+    local_end = end_dt.astimezone()
+    
+    # Check if it's an all-day event
+    if local_start.hour == 0 and local_start.minute == 0 and local_end.hour == 23 and local_end.minute == 59:
+        return "All Day"
+    else:
+        # Format times in 12-hour format with AM/PM
+        start_str = local_start.strftime('%I:%M %p').lstrip('0')
+        end_str = local_end.strftime('%I:%M %p').lstrip('0')
+        return f"{start_str} - {end_str}"
+
 def parse_event_datetime(event, field='start', as_date=False):
     """Parse datetime from a Google Calendar event field.
     
@@ -526,17 +549,8 @@ class ReminderManager:
         now = datetime.now(timezone.utc)
         for task in self.reminders:
             if task.status == 'Pending' and (task.start_dt - now) <= timedelta(minutes=task.reminder_minutes) and (task.start_dt - now) > timedelta(0):
-                local_start = task.start_dt.astimezone()
-                local_end = task.end_dt.astimezone()
-                
-                # Format the time strings
-                if local_start.hour == 0 and local_start.minute == 0 and local_end.hour == 23 and local_end.minute == 59:
-                    time_str = "All Day"
-                else:
-                    start_str = local_start.strftime('%I:%M %p').lstrip('0')
-                    end_str = local_end.strftime('%I:%M %p').lstrip('0')
-                    time_str = f"{start_str} - {end_str}"
-                
+                # Use the shared time formatting function
+                time_str = format_task_time(task.start_dt, task.end_dt)
                 self.root.show_alert(f"Reminder: {task.summary} at {time_str}", alert_type="info", duration=5000)
         self.root.after(60000, self.check_reminders)
 
@@ -1284,61 +1298,96 @@ class TodoAppUI(ctk.CTk):
             if hasattr(separator_frame, 'month_key') and separator_frame.month_key in self.month_containers:
                 self.month_containers[separator_frame.month_key]['expanded'] = False
 
-    def _add_task_to_container(self, container, task):
-        """Add a single task to a container."""
-        # Create task card
-        task_frame = ctk.CTkFrame(container, fg_color=CARD_COLOR, corner_radius=6)
+    def _render_task(self, parent_frame, task, is_monthly_view=False, truncate_length=None):
+        """Shared method to render a task UI element consistently across views.
         
-        # Format time considering potential all-day events
-        local_start = task.start_dt.astimezone()
-        local_end = task.end_dt.astimezone()
+        Args:
+            parent_frame: Frame to add the task to
+            task: Task object to render
+            is_monthly_view: Whether rendering in monthly view (affects styling)
+            truncate_length: Length to truncate summary text (None = no truncation)
+            
+        Returns:
+            task_frame: The created task frame
+        """
+        # Create task card with appropriate styling
+        corner_radius = 3 if is_monthly_view else 6
+        task_frame = ctk.CTkFrame(parent_frame, fg_color=CARD_COLOR, corner_radius=corner_radius)
         
-        if local_start.hour == 0 and local_start.minute == 0 and local_end.hour == 23 and local_end.minute == 59:
-            time_str = "All Day"
-        else:
-            # Format start and end times in 12-hour format
-            start_str = local_start.strftime('%I:%M %p').lstrip('0')
-            end_str = local_end.strftime('%I:%M %p').lstrip('0')
-            time_str = f"{start_str} - {end_str}"
+        # Format time using the shared helper function
+        time_str = format_task_time(task.start_dt, task.end_dt)
 
-        # Task label with summary and time
-        task_label = ctk.CTkLabel(task_frame, 
-                              text=f"{task.summary}", 
-                              font=FONT_LABEL, 
-                              text_color=TEXT_COLOR)
-        task_label.pack(fill="x", padx=4, pady=(3, 0))
+        # Handle summary truncation for monthly view
+        summary = task.summary
+        if truncate_length and len(summary) > truncate_length:
+            display_summary = f"{summary[:truncate_length]}..."
+        else:
+            display_summary = summary
+
+        # Create task summary label
+        prefix = "• " if is_monthly_view else ""
+        task_label = ctk.CTkLabel(
+            task_frame, 
+            text=f"{prefix}{display_summary}", 
+            font=FONT_SMALL if is_monthly_view else FONT_LABEL, 
+            text_color=TEXT_COLOR,
+            anchor="w" if is_monthly_view else "center"
+        )
         
-        # Time label
-        time_label = ctk.CTkLabel(task_frame,
-                               text=time_str,
-                               font=FONT_SMALL,
-                               text_color=TEXT_COLOR)
-        time_label.pack(fill="x", padx=4, pady=(0, 3))
+        # Pack with appropriate padding based on view
+        if is_monthly_view:
+            task_label.pack(anchor="w", fill="x", padx=2, pady=(1, 0))
+        else:
+            task_label.pack(fill="x", padx=4, pady=(3, 0))
         
-        task_frame.pack(fill="x", pady=PADDING/3)
+        # Create time label
+        time_label = ctk.CTkLabel(
+            task_frame,
+            text=time_str,
+            font=FONT_SMALL,
+            text_color=TEXT_COLOR,
+            anchor="w" if is_monthly_view else "center"
+        )
+        
+        # Pack with appropriate padding based on view
+        if is_monthly_view:
+            time_label.pack(anchor="w", fill="x", padx=2, pady=(0, 1))
+        else:
+            time_label.pack(fill="x", padx=4, pady=(0, 3))
         
         # Bind click events for editing
         task_frame.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
         task_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
         time_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
+        
+        return task_frame
 
-    def get_filtered_tasks_by_date(self, search_term=""):
-        """Get tasks filtered by search term, organized by date."""
-        tasks_by_date = self._get_tasks_by_date_dict()
-        
-        if search_term:
-            filtered = {}
-            search_term = search_term.lower()
+    def _add_task_to_container(self, container, task):
+        """Add a single task to a container."""
+        # Use the shared render method
+        task_frame = self._render_task(container, task)
+        task_frame.pack(fill="x", pady=PADDING/3)
+
+    def _add_tasks_to_cell(self, parent_frame, tasks, max_tasks):
+        """Helper to add tasks to a cell - separated for better readability."""
+        # Clear all existing widgets first
+        for widget in parent_frame.winfo_children():
+            widget.destroy()
             
-            for date, tasks in tasks_by_date.items():
-                matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
-                
-                if matching_tasks:
-                    filtered[date] = matching_tasks
+        tasks_added_count = 0
+        for i, task in enumerate(tasks):
+            if i >= max_tasks:
+                more_label = ctk.CTkLabel(parent_frame, text=f"+ {len(tasks) - max_tasks} more", 
+                                       font=FONT_SMALL, text_color="#AAAAAA", anchor="w")
+                more_label.pack(anchor="w", fill="x", padx=2, pady=0)
+                break
             
-            return filtered
-        
-        return tasks_by_date
+            # Use the shared render method with monthly view settings
+            task_frame = self._render_task(parent_frame, task, is_monthly_view=True, truncate_length=14)
+            task_frame.pack(fill="x", padx=1, pady=1)
+            tasks_added_count += 1
+            
+        return tasks_added_count
     
     def _create_day_header(self, parent_frame, day):
         """Create the date header for a day in daily view."""
@@ -1358,41 +1407,9 @@ class TodoAppUI(ctk.CTk):
     def _add_day_tasks(self, container, tasks):
         """Add tasks for a day to the container in daily view."""
         for task in tasks:
-            # Create task card
-            task_frame = ctk.CTkFrame(container, fg_color=CARD_COLOR, corner_radius=6)
-            
-            # Format time considering potential all-day events
-            local_start = task.start_dt.astimezone()
-            local_end = task.end_dt.astimezone()
-            
-            if local_start.hour == 0 and local_start.minute == 0 and local_end.hour == 23 and local_end.minute == 59:
-                time_str = "All Day"
-            else:
-                # Format start and end times in 12-hour format
-                start_str = local_start.strftime('%I:%M %p').lstrip('0')
-                end_str = local_end.strftime('%I:%M %p').lstrip('0')
-                time_str = f"{start_str} - {end_str}"
-
-            # Task label with summary and time
-            task_label = ctk.CTkLabel(task_frame, 
-                                  text=f"{task.summary}", 
-                                  font=FONT_LABEL, 
-                                  text_color=TEXT_COLOR)
-            task_label.pack(fill="x", padx=4, pady=(3, 0))
-            
-            # Time label
-            time_label = ctk.CTkLabel(task_frame,
-                                   text=time_str,
-                                   font=FONT_SMALL,
-                                   text_color=TEXT_COLOR)
-            time_label.pack(fill="x", padx=4, pady=(0, 3))
-            
+            # Use the shared render method
+            task_frame = self._render_task(container, task)
             task_frame.pack(fill="x", pady=PADDING/3)
-            
-            # Bind click events for editing
-            task_frame.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-            task_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-            time_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
 
     # Task Management
     def open_task_dialog(self, task=None):
@@ -1405,10 +1422,24 @@ class TodoAppUI(ctk.CTk):
                     'start': {'dateTime': new_task.start_dt.isoformat(), 'timeZone': 'UTC'},
                     'end': {'dateTime': new_task.end_dt.isoformat(), 'timeZone': 'UTC'}
                 }
-                try:
-                    self.calendar_manager.update_event('primary', task.task_id, updated_event)
-                except Exception as e:
-                    self.show_alert(f"Failed to update task: {str(e)}", alert_type="error", duration=4000)
+                
+                def on_update_success(result):
+                    self.show_alert(f"Task updated: {new_task.summary}", duration=3000)
+                    self.refresh_events()
+                
+                def on_update_error(error):
+                    self.show_alert(f"Failed to update task: {str(error)}", alert_type="error", duration=4000)
+                
+                # Queue the update in the worker thread
+                self.worker.add_task(
+                    "update_task",
+                    self.calendar_manager.update_event,
+                    callback=on_update_success,
+                    error_callback=on_update_error,
+                    calendar_id='primary',
+                    event_id=task.task_id,
+                    updated_event=updated_event
+                )
             else:
                 # Create new task
                 event = {
@@ -1416,41 +1447,79 @@ class TodoAppUI(ctk.CTk):
                     'start': {'dateTime': new_task.start_dt.isoformat(), 'timeZone': 'UTC'},
                     'end': {'dateTime': new_task.end_dt.isoformat(), 'timeZone': 'UTC'}
                 }
-                try:
-                    created = self.calendar_manager.add_event('primary', event)
-                    new_task.task_id = created.get('id')
-                except Exception as e:
-                    self.show_alert(f"Failed to add task: {str(e)}", alert_type="error", duration=4000)
-            self.refresh_events()
+                
+                def on_create_success(result):
+                    new_task.task_id = result.get('id')
+                    self.show_alert(f"Task created: {new_task.summary}", duration=3000)
+                    self.refresh_events()
+                
+                def on_create_error(error):
+                    self.show_alert(f"Failed to add task: {str(error)}", alert_type="error", duration=4000)
+                
+                # Queue the creation in the worker thread
+                self.worker.add_task(
+                    "create_task",
+                    self.calendar_manager.add_event,
+                    callback=on_create_success,
+                    error_callback=on_create_error,
+                    calendar_id='primary',
+                    event=event
+                )
             
         dialog = TaskDialog(self, on_confirm, task)
         dialog.grab_set()
-
-    def open_task_dialog_for_date(self, date):
-        """Open task dialog pre-set to a specific date."""
-        # Create a temporary default task to pre-set the date
-        # Use current hour rounded up to next hour as the default time
-        local_tz = datetime.now().astimezone().tzinfo
-        now = datetime.now()
         
-        # Round up to the next hour
-        if now.minute > 0 or now.second > 0:
-            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_hour = now
+    def delete_task(self, task):
+        """Delete a task from the calendar."""
+        if not task or not task.task_id:
+            self.show_alert("Cannot delete task: no task ID", alert_type="error", duration=3000)
+            return
             
-        # Combine selected date with time
-        start_dt = datetime.combine(date, next_hour.time())
-        start_dt = start_dt.replace(tzinfo=local_tz)
-        start_dt_utc = local_to_utc(start_dt)
+        def on_delete_success(result):
+            self.show_alert(f"Task deleted", duration=3000)
+            # Remove from local list
+            self.task_list = [t for t in self.task_list if t.task_id != task.task_id]
+            # Remove from cache
+            for month_data in self.task_cache.values():
+                for date, tasks in list(month_data.items()):
+                    month_data[date] = [t for t in tasks if t.task_id != task.task_id]
+            # Refresh the current view
+            if self.current_view == "daily":
+                self.build_daily_view()
+            elif self.current_view == "monthly":
+                self._update_monthly_view_data(self.search_entry.get())
         
-        # Default 1 hour duration
-        end_dt_utc = start_dt_utc + timedelta(hours=1)
+        def on_delete_error(error):
+            self.show_alert(f"Failed to delete task: {str(error)}", alert_type="error", duration=4000)
         
-        # Create temp task just to set the date
-        temp_task = Task("", start_dt_utc, end_dt_utc)
-        self.open_task_dialog(temp_task)
+        # Queue the deletion in the worker thread
+        self.worker.add_task(
+            "delete_task",
+            self.calendar_manager.delete_event,
+            callback=on_delete_success,
+            error_callback=on_delete_error,
+            calendar_id='primary',
+            event_id=task.task_id
+        )
 
+    def get_filtered_tasks_by_date(self, search_term=""):
+        """Get tasks filtered by search term, organized by date."""
+        tasks_by_date = self._get_tasks_by_date_dict()
+        
+        if search_term:
+            filtered = {}
+            search_term = search_term.lower()
+            
+            for date, tasks in tasks_by_date.items():
+                matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
+                
+                if matching_tasks:
+                    filtered[date] = matching_tasks
+            
+            return filtered
+        
+        return tasks_by_date
+    
     def _get_tasks_by_date_dict(self):
         """Get tasks organized by date from the task list."""
         tasks_dict = {}
@@ -1709,64 +1778,6 @@ class TodoAppUI(ctk.CTk):
                                 text_color="#FFFFFF", 
                                 anchor="w")
         holiday_label.pack(anchor="w", fill="x", padx=3, pady=1)
-    
-    def _add_tasks_to_cell(self, parent_frame, tasks, max_tasks):
-        """Helper to add tasks to a cell - separated for better readability."""
-        # Clear all existing widgets first
-        for widget in parent_frame.winfo_children():
-            widget.destroy()
-            
-        tasks_added_count = 0
-        for i, task in enumerate(tasks):
-            if i >= max_tasks:
-                more_label = ctk.CTkLabel(parent_frame, text=f"+ {len(tasks) - max_tasks} more", 
-                                       font=FONT_SMALL, text_color="#AAAAAA", anchor="w")
-                more_label.pack(anchor="w", fill="x", padx=2, pady=0)
-                break
-            
-            # Format time in 12-hour format
-            start_time = task.start_dt.astimezone()
-            end_time = task.end_dt.astimezone()
-            
-            # All-day event detection
-            if start_time.hour == 0 and start_time.minute == 0 and end_time.hour == 23 and end_time.minute == 59:
-                time_str = "All Day"
-            else:
-                start_str = start_time.strftime('%I:%M %p').lstrip('0')
-                end_str = end_time.strftime('%I:%M %p').lstrip('0')
-                time_str = f"{start_str} - {end_str}"
-            
-            summary = task.summary
-            max_len = 14  # Shorter to fit time range
-            display_summary = (summary[:max_len] + '...') if len(summary) > max_len else summary
-            
-            # Create task frame with background color
-            task_frame = ctk.CTkFrame(parent_frame, fg_color=CARD_COLOR, corner_radius=3)
-            task_frame.pack(fill="x", padx=1, pady=1)
-            
-            # Simplified task display inside the colored frame
-            task_label = ctk.CTkLabel(task_frame, 
-                                   text=f"• {display_summary}", 
-                                   font=FONT_SMALL, 
-                                   text_color=TEXT_COLOR, 
-                                   anchor="w")
-            task_label.pack(anchor="w", fill="x", padx=2, pady=(1, 0))
-            
-            # Add time on a second line
-            time_label = ctk.CTkLabel(task_frame,
-                                    text=time_str,
-                                    font=FONT_SMALL,
-                                    text_color=TEXT_COLOR,
-                                    anchor="w")
-            time_label.pack(anchor="w", fill="x", padx=2, pady=(0, 1))
-            
-            # Bind click event to both frame and labels
-            task_frame.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-            task_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-            time_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-            tasks_added_count += 1
-            
-        return tasks_added_count
     
     def _setup_calendar_cell_dates(self, month_calendar):
         """Set up the date numbers in calendar cells while waiting for data."""
@@ -2160,6 +2171,31 @@ class TodoAppUI(ctk.CTk):
             calendar_id='primary',
             event_id=task.task_id
         )
+
+    def open_task_dialog_for_date(self, date):
+        """Open task dialog pre-set to a specific date."""
+        # Create a temporary default task to pre-set the date
+        # Use current hour rounded up to next hour as the default time
+        local_tz = datetime.now().astimezone().tzinfo
+        now = datetime.now()
+        
+        # Round up to the next hour
+        if now.minute > 0 or now.second > 0:
+            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_hour = now
+            
+        # Combine selected date with time
+        start_dt = datetime.combine(date, next_hour.time())
+        start_dt = start_dt.replace(tzinfo=local_tz)
+        start_dt_utc = local_to_utc(start_dt)
+        
+        # Default 1 hour duration
+        end_dt_utc = start_dt_utc + timedelta(hours=1)
+        
+        # Create temp task just to set the date
+        temp_task = Task("", start_dt_utc, end_dt_utc)
+        self.open_task_dialog(temp_task)
 
 # API WORKER THREAD
 class APIWorker:
