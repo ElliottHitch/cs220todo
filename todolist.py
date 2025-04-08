@@ -755,8 +755,6 @@ class TodoAppUI(ctk.CTk):
         self.refresh_events()
         self.reminder_manager.check_reminders()
         
-        self.after(100, self._check_scroll_position)
-        
         self.check_token_refresh()
         
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -815,15 +813,14 @@ class TodoAppUI(ctk.CTk):
         if not hasattr(self, 'month_containers') or not self.month_containers:
             return
             
-        with self.data_lock:
-            rendered_days_copy = self.rendered_days.copy()
-            
         for month_key, month_data in self.month_containers.items():
             if not month_data.get('expanded', False):
                 continue
                 
             for day_key, day_data in month_data.get('days', {}).items():
-                if day_key not in rendered_days_copy and not day_data.get('rendered', False):
+                with self.data_lock:
+                    already_rendered = day_key in self.rendered_days
+                if not already_rendered and not day_data.get('rendered', False):
                     self._render_day(month_key, day_key, day_data)
     
     def _render_day(self, month_key, day_key, day_data):
