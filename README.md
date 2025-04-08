@@ -32,7 +32,6 @@ You need to set up Google Calendar API credentials:
 4. Create OAuth 2.0 credentials (Desktop application type)
 5. Download the credentials JSON file and save it as `credentials.json` in the root folder of this project
 
-> **Important**: Never commit `credentials.json` or `token.json` to version control. These files contain sensitive information and are included in the .gitignore file.
 
 ### 4. Run the application
 ```
