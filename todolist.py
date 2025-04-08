@@ -314,32 +314,68 @@ class CalendarManager:
                 # Get events from cache and filter by date range
                 return self._get_cached_events_in_range(month_keys, start_date, end_date)
             
-            # Fetch events directly from API
-            events = []
-            next_token = None
+            # Identify which months need to be fetched
+            uncached_months = [key for key in month_keys if key not in self.event_cache]
             
-            while True:
-                batch, next_token = self.fetch_events(
-                    calendar_id=calendar_id,
-                    max_results=50,
-                    page_token=next_token,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                
-                if not batch:
-                    break
-                    
-                events.extend(batch)
-                
-                # Break if no more pages
-                if not next_token:
-                    break
-                    
-            # Update cache with these events
-            self._update_cache_with_events(events)
+            # Get cached events for the cached months
+            cached_events = self._get_cached_events_in_range(
+                [key for key in month_keys if key in self.event_cache], 
+                start_date, 
+                end_date
+            )
             
-            return events
+            # Fetch only the uncached months
+            new_events = []
+            for month_key in uncached_months:
+                year, month = month_key
+                # Calculate start and end date for this month
+                month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+                if month == 12:
+                    month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+                else:
+                    month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+                
+                # Adjust to requested date range if needed
+                fetch_start = max(month_start, start_date)
+                fetch_end = min(month_end, end_date)
+                
+                # Fetch events for this month
+                month_events = []
+                next_token = None
+                
+                while True:
+                    batch, next_token = self.fetch_events(
+                        calendar_id=calendar_id,
+                        max_results=50,
+                        page_token=next_token,
+                        start_date=fetch_start,
+                        end_date=fetch_end
+                    )
+                    
+                    if not batch:
+                        break
+                        
+                    month_events.extend(batch)
+                    
+                    # Break if no more pages
+                    if not next_token:
+                        break
+                
+                # Update cache with these events
+                self._update_cache_with_events(month_events)
+                new_events.extend(month_events)
+            
+            # Merge cached and new events, avoiding duplicates
+            all_events = cached_events.copy()
+            existing_ids = {event.get('id') for event in cached_events if event.get('id')}
+            
+            for event in new_events:
+                event_id = event.get('id')
+                if event_id and event_id not in existing_ids:
+                    all_events.append(event)
+                    existing_ids.add(event_id)
+            
+            return all_events
             
         except Exception as e:
             print(f"Error fetching events for range: {str(e)}")
