@@ -1031,17 +1031,6 @@ class TodoAppUI(ctk.CTk):
         if added_count > 0 and self.ui_dirty:
             self._update_current_view()
 
-    def _convert_event_to_task(self, event):
-        """Convert a Google Calendar event to a Task object."""
-        try:
-            start_dt = parse_event_datetime(event, field='start')
-            end_dt = parse_event_datetime(event, field='end')
-            task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
-            return task
-        except Exception as e:
-            print(f"Error converting event to task: {str(e)}")
-            return None
-
     def build_daily_view(self, search_term=""):
         """Build the daily view with all tasks rendered for expanded months."""
         # Clear tracking variables
@@ -1162,12 +1151,8 @@ class TodoAppUI(ctk.CTk):
                 separator_frame.task_count_text = task_count_text
                 separator_frame.month_key = month_key
                 
-                # Bind click event to toggle
+                # Bind click event to toggle - only bind to the top-level container
                 separator_frame.bind("<Button-1>", self._toggle_month_section)
-                header_container.bind("<Button-1>", lambda e, sf=separator_frame: self._toggle_month_section(e, sf))
-                header_frame.bind("<Button-1>", lambda e, sf=separator_frame: self._toggle_month_section(e, sf))
-                month_year_label.bind("<Button-1>", lambda e, sf=separator_frame: self._toggle_month_section(e, sf))
-                task_count_label.bind("<Button-1>", lambda e, sf=separator_frame: self._toggle_month_section(e, sf))
                 
                 # Update tracking variables
                 current_month = day.month
@@ -1271,9 +1256,8 @@ class TodoAppUI(ctk.CTk):
                            text_color="#FFFFFF", anchor=anchor)
         time_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(0, padding[1]))
         
-        # Bind click events for editing
-        for widget in (task_frame, task_label, time_label):
-            widget.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
+        # Bind click event only to the top-level container
+        task_frame.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
         
         return task_frame
 
@@ -1488,8 +1472,8 @@ class TodoAppUI(ctk.CTk):
                 if local_date not in tasks_by_date:
                     tasks_by_date[local_date] = []
                     
-                # Convert event to task using helper method
-                task = self._convert_event_to_task(event)
+                # Convert event to task using cache manager's helper method
+                task = self.calendar_manager.cache._convert_event_to_task(event)
                 if task:
                     tasks_by_date[local_date].append(task)
             except Exception as e:
