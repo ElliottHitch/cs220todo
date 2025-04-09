@@ -923,20 +923,14 @@ class TodoAppUI(ctk.CTk):
             if event_id in existing_ids:
                 continue  # Skip duplicates
                 
-            # Process event start time
-            try:
-                start_dt = parse_event_datetime(event, field='start')
-                end_dt = parse_event_datetime(event, field='end')
-
-                # Create task from event
-                task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
+            # Convert event to task using helper method
+            task = self._convert_event_to_task(event)
+            if task:
                 new_tasks.append(task)
                 added_count += 1
                 
                 # Add to reminders
                 self.reminder_manager.add_reminder(task)
-            except Exception as e:
-                print(f"Error processing event: {str(e)}")
         
         # Update shared data structures with lock
         with self.data_lock:
@@ -959,6 +953,17 @@ class TodoAppUI(ctk.CTk):
         # Only update UI if we've added events and UI needs updating
         if added_count > 0 and self.ui_dirty:
             self._update_current_view()
+
+    def _convert_event_to_task(self, event):
+        """Convert a Google Calendar event to a Task object."""
+        try:
+            start_dt = parse_event_datetime(event, field='start')
+            end_dt = parse_event_datetime(event, field='end')
+            task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
+            return task
+        except Exception as e:
+            print(f"Error converting event to task: {str(e)}")
+            return None
 
     def build_daily_view(self, search_term=""):
         """Build the daily view with all tasks rendered for expanded months."""
@@ -1477,12 +1482,10 @@ class TodoAppUI(ctk.CTk):
                 if local_date not in tasks_by_date:
                     tasks_by_date[local_date] = []
                     
-                # Create task from event
-                start_dt = parse_event_datetime(event, field='start')
-                end_dt = parse_event_datetime(event, field='end')
-                    
-                task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
-                tasks_by_date[local_date].append(task)
+                # Convert event to task using helper method
+                task = self._convert_event_to_task(event)
+                if task:
+                    tasks_by_date[local_date].append(task)
             except Exception as e:
                 print(f"Error processing event for monthly view: {str(e)}")
                 
@@ -1599,12 +1602,10 @@ class TodoAppUI(ctk.CTk):
                     if local_date not in tasks_by_date:
                         tasks_by_date[local_date] = []
                         
-                    # Create task from event
-                    start_dt = parse_event_datetime(event, field='start')
-                    end_dt = parse_event_datetime(event, field='end')
-                        
-                    task = Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
-                    tasks_by_date[local_date].append(task)
+                    # Convert event to task using helper method
+                    task = self._convert_event_to_task(event)
+                    if task:
+                        tasks_by_date[local_date].append(task)
                 except Exception as e:
                     print(f"Error processing preloaded event: {str(e)}")
             
