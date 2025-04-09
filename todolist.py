@@ -115,6 +115,7 @@ class CacheManager:
         self.holidays_by_month = {} # {(year, month): {date: holiday_name}}
         self.cache_lock = threading.Lock()
         self.fetched_ranges = set()
+        self.event_ids = set()  # Set to track all event IDs
         
     def add_event(self, event):
         """Add or update an event in the cache."""
@@ -131,6 +132,9 @@ class CacheManager:
             if event_id:
                 self.events_by_month[month_key] = [e for e in self.events_by_month[month_key] 
                                                   if e.get('id') != event_id]
+                
+                # Add to event IDs set
+                self.event_ids.add(event_id)
                 
             # Add the new/updated event
             self.events_by_month[month_key].append(event)
@@ -164,13 +168,22 @@ class CacheManager:
             # Remove from tasks cache
             for date, tasks_list in list(self.tasks_by_date.items()):
                 self.tasks_by_date[date] = [t for t in tasks_list if getattr(t, 'task_id', None) != event_id]
+            
+            # Remove from event IDs set
+            self.event_ids.discard(event_id)
     
     def clear_month(self, year, month):
         """Clear the cache for a specific month."""
         month_key = (year, month)
         with self.cache_lock:
+            # Remove event IDs from this month
             if month_key in self.events_by_month:
+                for event in self.events_by_month[month_key]:
+                    event_id = event.get('id')
+                    if event_id:
+                        self.event_ids.discard(event_id)
                 del self.events_by_month[month_key]
+                
             if month_key in self.holidays_by_month:
                 del self.holidays_by_month[month_key]
                 
@@ -185,6 +198,11 @@ class CacheManager:
                 
             # Remove this range from fetched ranges
             self.fetched_ranges.discard(month_key)
+            
+    def has_event_id(self, event_id):
+        """Check if an event ID exists in the cache."""
+        with self.cache_lock:
+            return event_id in self.event_ids
     
     def get_events_for_month(self, year, month):
         """Get all events for a specific month."""
@@ -1031,12 +1049,10 @@ class TodoAppUI(ctk.CTk):
         added_count = 0
         
         for event in events:
-            # Get existing task IDs from cache for checking duplicates
-            all_tasks = self.calendar_manager.cache.get_all_tasks()
-            existing_ids = {task.task_id for task in all_tasks if task.task_id}
-            
             event_id = event.get('id')
-            if event_id in existing_ids:
+            
+            # Check if event already exists using our dedicated set
+            if event_id and self.calendar_manager.cache.has_event_id(event_id):
                 continue  # Skip duplicates
                 
             # Add to cache which handles converting to task
