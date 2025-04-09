@@ -107,6 +107,147 @@ def parse_event_datetime(event, field='start', as_date=False):
 
 
 # GOOGLE API CLASSES
+class CacheManager:
+    """Centralized cache manager for all calendar data."""
+    def __init__(self):
+        self.events_by_month = {}  # {(year, month): [events]}
+        self.tasks_by_date = {}    # {date: [tasks]}
+        self.holidays_by_month = {} # {(year, month): {date: holiday_name}}
+        self.cache_lock = threading.Lock()
+        self.fetched_ranges = set()
+        
+    def add_event(self, event):
+        """Add or update an event in the cache."""
+        with self.cache_lock:
+            event_start = parse_event_datetime(event, field='start')
+            month_key = (event_start.year, event_start.month)
+            
+            # Update events cache
+            if month_key not in self.events_by_month:
+                self.events_by_month[month_key] = []
+                
+            # Remove existing event with same ID if present
+            event_id = event.get('id')
+            if event_id:
+                self.events_by_month[month_key] = [e for e in self.events_by_month[month_key] 
+                                                  if e.get('id') != event_id]
+                
+            # Add the new/updated event
+            self.events_by_month[month_key].append(event)
+            
+            # Also update the tasks cache
+            task = self._convert_event_to_task(event)
+            if task:
+                local_date = task.start_dt.astimezone().date()
+                if local_date not in self.tasks_by_date:
+                    self.tasks_by_date[local_date] = []
+                    
+                # Remove existing task with same ID
+                self.tasks_by_date[local_date] = [t for t in self.tasks_by_date[local_date] 
+                                                if getattr(t, 'task_id', None) != event_id]
+                
+                # Add the new task
+                self.tasks_by_date[local_date].append(task)
+    
+    def add_events(self, events):
+        """Add multiple events to the cache at once."""
+        for event in events:
+            self.add_event(event)
+                
+    def delete_event(self, event_id):
+        """Delete an event from all caches."""
+        with self.cache_lock:
+            # Remove from events cache
+            for month_key, events_list in list(self.events_by_month.items()):
+                self.events_by_month[month_key] = [e for e in events_list if e.get('id') != event_id]
+            
+            # Remove from tasks cache
+            for date, tasks_list in list(self.tasks_by_date.items()):
+                self.tasks_by_date[date] = [t for t in tasks_list if getattr(t, 'task_id', None) != event_id]
+    
+    def clear_month(self, year, month):
+        """Clear the cache for a specific month."""
+        month_key = (year, month)
+        with self.cache_lock:
+            if month_key in self.events_by_month:
+                del self.events_by_month[month_key]
+            if month_key in self.holidays_by_month:
+                del self.holidays_by_month[month_key]
+                
+            # Also clear tasks for this month from tasks_by_date
+            dates_to_remove = []
+            for date in self.tasks_by_date:
+                if date.year == year and date.month == month:
+                    dates_to_remove.append(date)
+                    
+            for date in dates_to_remove:
+                del self.tasks_by_date[date]
+                
+            # Remove this range from fetched ranges
+            self.fetched_ranges.discard(month_key)
+    
+    def get_events_for_month(self, year, month):
+        """Get all events for a specific month."""
+        month_key = (year, month)
+        with self.cache_lock:
+            return self.events_by_month.get(month_key, [])[:]  # Return a copy
+    
+    def get_tasks_for_date(self, date):
+        """Get all tasks for a specific date."""
+        with self.cache_lock:
+            return self.tasks_by_date.get(date, [])[:]  # Return a copy
+    
+    def get_tasks_for_month(self, year, month):
+        """Get all tasks for a specific month, organized by date."""
+        result = {}
+        with self.cache_lock:
+            for date, tasks in self.tasks_by_date.items():
+                if date.year == year and date.month == month:
+                    result[date] = tasks[:]  # Copy the list
+        return result
+    
+    def get_all_tasks(self):
+        """Get all tasks in the cache, as a list."""
+        all_tasks = []
+        with self.cache_lock:
+            for tasks in self.tasks_by_date.values():
+                all_tasks.extend(tasks)
+        return all_tasks
+    
+    def get_holidays_for_month(self, year, month):
+        """Get holidays for a specific month."""
+        month_key = (year, month)
+        with self.cache_lock:
+            return self.holidays_by_month.get(month_key, {}).copy()  # Return a copy
+    
+    def add_holidays(self, year, month, holidays):
+        """Add holidays for a month to the cache."""
+        month_key = (year, month)
+        with self.cache_lock:
+            self.holidays_by_month[month_key] = holidays
+    
+    def month_is_cached(self, year, month):
+        """Check if a month's data is already cached."""
+        month_key = (year, month)
+        with self.cache_lock:
+            return month_key in self.events_by_month
+    
+    def mark_range_fetched(self, year, month):
+        """Mark a date range as having been fetched."""
+        month_key = (year, month)
+        with self.cache_lock:
+            self.fetched_ranges.add(month_key)
+    
+    def _convert_event_to_task(self, event):
+        """Convert a Google Calendar event to a Task object."""
+        try:
+            start_dt = parse_event_datetime(event, field='start')
+            end_dt = parse_event_datetime(event, field='end')
+            return Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
+        except Exception as e:
+            print(f"Error converting event to task: {str(e)}")
+            return None
+
 class GoogleAuthService:
     """Handles authentication with Google API."""
     def __init__(self, scopes, token_file=TOKEN_FILE, credentials_file=CREDENTIALS_FILE):
@@ -182,8 +323,7 @@ class CalendarManager:
     def __init__(self, auth_service):
         self.auth_service = auth_service
         self.service = self.auth_service.get_calendar_service()
-        self.holiday_cache = {}
-        self.event_cache = {}
+        self.cache = CacheManager()
         self.fetch_lock = threading.Lock()
         self.fetching_ranges = set()
     
@@ -253,19 +393,32 @@ class CalendarManager:
             
             month_keys = self._get_month_keys_in_range(start_date, end_date)
             
-            all_cached = all(key in self.event_cache for key in month_keys)
+            all_cached = all(self.cache.month_is_cached(*month_key) for month_key in month_keys)
             
             if all_cached:
-                return self._get_cached_events_in_range(month_keys, start_date, end_date)
+                # Collect events from all relevant months
+                all_events = []
+                for month_key in month_keys:
+                    events = self.cache.get_events_for_month(*month_key)
+                    for event in events:
+                        event_start = parse_event_datetime(event, field='start')
+                        if start_date <= event_start <= end_date:
+                            all_events.append(event)
+                return all_events
             
-            uncached_months = [key for key in month_keys if key not in self.event_cache]
+            # Identify uncached months
+            uncached_months = [m for m in month_keys if not self.cache.month_is_cached(*m)]
             
-            cached_events = self._get_cached_events_in_range(
-                [key for key in month_keys if key in self.event_cache], 
-                start_date, 
-                end_date
-            )
+            # Get events from cached months
+            cached_events = []
+            for month_key in [m for m in month_keys if m not in uncached_months]:
+                events = self.cache.get_events_for_month(*month_key)
+                for event in events:
+                    event_start = parse_event_datetime(event, field='start')
+                    if start_date <= event_start <= end_date:
+                        cached_events.append(event)
             
+            # Fetch events for uncached months
             new_events = []
             for month_key in uncached_months:
                 year, month = month_key
@@ -298,9 +451,12 @@ class CalendarManager:
                     if not next_token:
                         break
                 
-                self._update_cache_with_events(month_events)
+                # Update cache with new events
+                self.cache.add_events(month_events)
+                self.cache.mark_range_fetched(year, month)
                 new_events.extend(month_events)
             
+            # Combine cached and new events, avoiding duplicates
             all_events = cached_events.copy()
             existing_ids = {event.get('id') for event in cached_events if event.get('id')}
             
@@ -336,46 +492,9 @@ class CalendarManager:
             
         return month_keys
     
-    def _get_cached_events_in_range(self, month_keys, start_date, end_date):
-        """Get events from cache that fall within the date range."""
-        all_events = []
-        
-        for key in month_keys:
-            events = self.event_cache.get(key, [])
-            for event in events:
-                event_start = self._get_event_start_datetime(event)
-                if start_date <= event_start <= end_date:
-                    all_events.append(event)
-                    
-        return all_events
-    
-    def _update_cache_with_events(self, events):
-        """Update the event cache with new events."""
-        with self.fetch_lock:
-            for event in events:
-                event_start = self._get_event_start_datetime(event)
-                month_key = (event_start.year, event_start.month)
-                
-                if month_key not in self.event_cache:
-                    self.event_cache[month_key] = []
-                    
-                event_id = event.get('id')
-                if event_id:
-                    self.event_cache[month_key] = [e for e in self.event_cache[month_key] 
-                                                  if e.get('id') != event_id]
-                    
-                self.event_cache[month_key].append(event)
-    
-    def _get_event_start_datetime(self, event):
-        """Extract start datetime from an event object."""
-        return parse_event_datetime(event, field='start')
-    
     def clear_cache_for_month(self, year, month):
         """Clear the cache for a specific month to force refresh."""
-        month_key = (year, month)
-        with self.fetch_lock:
-            if month_key in self.event_cache:
-                del self.event_cache[month_key]
+        self.cache.clear_month(year, month)
 
     def add_event(self, calendar_id, event):
         """Add a new event to Google Calendar."""
@@ -387,7 +506,8 @@ class CalendarManager:
                 body=event
             ).execute()
             
-            self._update_cache_with_events([result])
+            # Update both caches
+            self.cache.add_event(result)
             return result
         except Exception as e:
             print(f"Error adding event: {str(e)}")
@@ -404,7 +524,8 @@ class CalendarManager:
                 body=updated_event
             ).execute()
             
-            self._update_cache_with_events([result])
+            # Update cache
+            self.cache.add_event(result)
             return result
         except Exception as e:
             print(f"Error updating event: {str(e)}")
@@ -420,13 +541,8 @@ class CalendarManager:
                 eventId=event_id
             ).execute()
             
-            with self.fetch_lock:
-                for month_events in self.event_cache.values():
-                    for i, event in enumerate(month_events):
-                        if event.get('id') == event_id:
-                            month_events.pop(i)
-                            break
-            
+            # Clean up cache
+            self.cache.delete_event(event_id)
             return result
         except Exception as e:
             print(f"Error deleting event: {str(e)}")
@@ -436,9 +552,10 @@ class CalendarManager:
         """Fetch holidays for a specific month from Google Calendar."""
         self._ensure_valid_token()
         
-        cache_key = (year, month)
-        if cache_key in self.holiday_cache:
-            return self.holiday_cache[cache_key]
+        month_key = (year, month)
+        holidays = self.cache.get_holidays_for_month(year, month)
+        if holidays:
+            return holidays
             
         try:
             holiday_calendar_id = 'en.usa#holiday@group.v.calendar.google.com'
@@ -467,7 +584,8 @@ class CalendarManager:
                     event_date = datetime.fromisoformat(item['start']['date']).date()
                     holidays[event_date] = item['summary']
                     
-            self.holiday_cache[cache_key] = holidays
+            # Update cache
+            self.cache.add_holidays(year, month, holidays)
             return holidays
             
         except Exception as e:
@@ -726,14 +844,12 @@ class TodoAppUI(ctk.CTk):
         self.geometry("1200x1000")
         self.configure(fg_color=BACKGROUND_COLOR)
         
-        self.task_list = []
         self.current_view = "daily"
         
         today = datetime.now().date()
         self.displayed_year = today.year
         self.displayed_month = today.month
         
-        self.task_cache = {}
         self.preload_active = False
         self.ui_dirty = True
         self.loading = False
@@ -910,45 +1026,27 @@ class TodoAppUI(ctk.CTk):
         self.ui_dirty = False
     
     def _process_loaded_events(self, events):
-        """Process loaded events and update the task list and cache."""
-        # Add events to task list (avoid duplicates)
-        with self.data_lock:
-            existing_ids = {task.task_id for task in self.task_list if task.task_id}
-        
+        """Process loaded events and update the cache."""
+        # Add events to cache
         added_count = 0
-        new_tasks = []
         
         for event in events:
+            # Get existing task IDs from cache for checking duplicates
+            all_tasks = self.calendar_manager.cache.get_all_tasks()
+            existing_ids = {task.task_id for task in all_tasks if task.task_id}
+            
             event_id = event.get('id')
             if event_id in existing_ids:
                 continue  # Skip duplicates
                 
-            # Convert event to task using helper method
-            task = self._convert_event_to_task(event)
-            if task:
-                new_tasks.append(task)
-                added_count += 1
-                
-                # Add to reminders
-                self.reminder_manager.add_reminder(task)
-        
-        # Update shared data structures with lock
-        with self.data_lock:
-            self.task_list.extend(new_tasks)
+            # Add to cache which handles converting to task
+            self.calendar_manager.cache.add_event(event)
+            added_count += 1
             
-            # Update cache by date
-            for task in new_tasks:
-                local_date = task.start_dt.astimezone().date()
-                year_month = (local_date.year, local_date.month)
-                
-                # Initialize cache structure if not exists
-                if year_month not in self.task_cache:
-                    self.task_cache[year_month] = {}
-                if local_date not in self.task_cache[year_month]:
-                    self.task_cache[year_month][local_date] = []
-                    
-                # Add task to cache
-                self.task_cache[year_month][local_date].append(task)
+            # Add to reminders
+            task = self.calendar_manager.cache._convert_event_to_task(event)
+            if task:
+                self.reminder_manager.add_reminder(task)
         
         # Only update UI if we've added events and UI needs updating
         if added_count > 0 and self.ui_dirty:
@@ -1343,16 +1441,6 @@ class TodoAppUI(ctk.CTk):
         def on_delete_success(result):
             self.show_alert(f"Task deleted", duration=3000)
             
-            # Remove from local list and cache with thread safety
-            with self.data_lock:
-                # Remove from local list
-                self.task_list = [t for t in self.task_list if t.task_id != task.task_id]
-                
-                # Remove from cache
-                for month_data in self.task_cache.values():
-                    for date, tasks in list(month_data.items()):
-                        month_data[date] = [t for t in tasks if t.task_id != task.task_id]
-            
             # Refresh the current view
             if self.current_view == "daily":
                 self.build_daily_view()
@@ -1374,32 +1462,25 @@ class TodoAppUI(ctk.CTk):
 
     def get_filtered_tasks_by_date(self, search_term=""):
         """Get tasks filtered by search term, organized by date."""
-        with self.data_lock:
-            tasks_by_date = self._get_tasks_by_date_dict()
-        
-            if search_term:
-                filtered = {}
-                search_term = search_term.lower()
-                
-                for date, tasks in tasks_by_date.items():
-                    matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
-                    
-                    if matching_tasks:
-                        filtered[date] = matching_tasks
-                
-                return filtered
+        tasks_by_date = self._get_tasks_by_date_dict()
+    
+        if search_term:
+            filtered = {}
+            search_term = search_term.lower()
             
-            return tasks_by_date
+            for date, tasks in tasks_by_date.items():
+                matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
+                
+                if matching_tasks:
+                    filtered[date] = matching_tasks
+            
+            return filtered
+        
+        return tasks_by_date
     
     def _get_tasks_by_date_dict(self):
-        """Get tasks organized by date from the task list."""
-        tasks_dict = {}
-        for task in self.task_list:
-            local_date = task.start_dt.astimezone().date()
-            if local_date not in tasks_dict:
-                tasks_dict[local_date] = []
-            tasks_dict[local_date].append(task)
-        return tasks_dict
+        """Get tasks organized by date from the cache."""
+        return self.calendar_manager.cache.tasks_by_date.copy()
 
     def _update_monthly_view_data(self, search_term=""):
         """Updates the existing monthly view widgets with data for the current month."""
@@ -1424,10 +1505,6 @@ class TodoAppUI(ctk.CTk):
             # Process events into tasks by date
             tasks_by_date = self._process_events_for_monthly_view(events)
                 
-            # Store in cache with thread safety
-            with self.data_lock:
-                self.task_cache[(self.displayed_year, self.displayed_month)] = tasks_by_date
-            
             # Update the UI with these tasks
             self._update_calendar_cells(tasks_by_date, search_term)
             
@@ -1437,11 +1514,10 @@ class TodoAppUI(ctk.CTk):
         # Check if we have cached data for this month
         month_key = (self.displayed_year, self.displayed_month)
         
-        with self.data_lock:
-            has_cached_data = month_key in self.task_cache
-            tasks_by_date = self.task_cache.get(month_key, {})
+        # Get tasks for this month from the cache
+        tasks_by_date = self.calendar_manager.cache.get_tasks_for_month(self.displayed_year, self.displayed_month)
         
-        if has_cached_data:
+        if tasks_by_date:
             # Use cached data
             self._update_calendar_cells(tasks_by_date, search_term)
         else:
@@ -1547,13 +1623,8 @@ class TodoAppUI(ctk.CTk):
             next_year, next_month = self._get_next_month(self.displayed_year, self.displayed_month)
                 
             # Check if we already have data for these months
-            next_month_key = (next_year, next_month)
-            prev_month_key = (prev_year, prev_month)
-            
-            # Check cache with thread safety
-            with self.data_lock:
-                next_month_cached = next_month_key in self.task_cache
-                prev_month_cached = prev_month_key in self.task_cache
+            next_month_cached = self.calendar_manager.cache.month_is_cached(next_year, next_month)
+            prev_month_cached = self.calendar_manager.cache.month_is_cached(prev_year, prev_month)
             
             # Preload next month if not cached
             if not next_month_cached:
@@ -1581,37 +1652,12 @@ class TodoAppUI(ctk.CTk):
             return year + 1, 1
         else:
             return year, month + 1
-    
+            
     def _preload_month_data(self, year, month):
         """Preload data for a specific month."""
         def on_events_loaded(events):
-            # Process events into tasks by date for the month
-            tasks_by_date = {}
-            
-            for event in events:
-                try:
-                    # Extract the event date (in local time)
-                    event_dt = parse_event_datetime(event, field='start')
-                    local_date = event_dt.astimezone().date()
-                    
-                    # Only process events for this month
-                    if local_date.month != month or local_date.year != year:
-                        continue
-                        
-                    # Add to tasks by date
-                    if local_date not in tasks_by_date:
-                        tasks_by_date[local_date] = []
-                        
-                    # Convert event to task using helper method
-                    task = self._convert_event_to_task(event)
-                    if task:
-                        tasks_by_date[local_date].append(task)
-                except Exception as e:
-                    print(f"Error processing preloaded event: {str(e)}")
-            
-            # Store in cache for future use with thread safety
-            with self.data_lock:
-                self.task_cache[(year, month)] = tasks_by_date
+            # Processing is handled automatically by the cache
+            pass
         
         def on_error(error):
             print(f"Error preloading data for {month}/{year}: {str(error)}")
