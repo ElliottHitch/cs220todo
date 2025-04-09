@@ -956,7 +956,9 @@ class TodoAppUI(ctk.CTk):
             self.show_alert(f"Error loading events: {str(error)}", alert_type="error", duration=5000)
             self._update_current_view()
         
-        start_date = datetime.now(timezone.utc)
+        # Use beginning of current month instead of just current date
+        now = datetime.now()
+        start_date = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         
         self.worker.add_task(
             "fetch_events",
@@ -1261,12 +1263,12 @@ class TodoAppUI(ctk.CTk):
 
         # Create task summary label
         task_label = ctk.CTkLabel(task_frame, text=f"{'• ' if is_monthly_view else ''}{display_summary}", 
-                           font=font, text_color=TEXT_COLOR, anchor=anchor)
+                           font=font, text_color="#FFFFFF", anchor=anchor)
         task_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(padding[1], 0))
         
         # Create time label
         time_label = ctk.CTkLabel(task_frame, text=time_str, font=FONT_SMALL, 
-                           text_color=TEXT_COLOR, anchor=anchor)
+                           text_color="#FFFFFF", anchor=anchor)
         time_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(0, padding[1]))
         
         # Bind click events for editing
@@ -1295,7 +1297,7 @@ class TodoAppUI(ctk.CTk):
         # Show "more" indicator if needed
         if len(tasks) > max_tasks:
             more_label = ctk.CTkLabel(parent_frame, text=f"+ {len(tasks) - max_tasks} more", 
-                                   font=FONT_SMALL, text_color="#AAAAAA", anchor="w")
+                                   font=FONT_SMALL, text_color="#CCCCFF", anchor="w")
             more_label.pack(anchor="w", fill="x", padx=2, pady=0)
         
         return min(len(tasks), max_tasks)
@@ -1446,26 +1448,22 @@ class TodoAppUI(ctk.CTk):
         # Check if we have cached data for this month
         month_key = (self.displayed_year, self.displayed_month)
         
-        # Get tasks for this month from the cache
-        tasks_by_date = self.calendar_manager.cache.get_tasks_for_month(self.displayed_year, self.displayed_month)
+        # First, clear the cache for the current month to ensure fresh data
+        self.calendar_manager.clear_cache_for_month(self.displayed_year, self.displayed_month)
         
-        if tasks_by_date:
-            # Use cached data
-            self._update_calendar_cells(tasks_by_date, search_term)
-        else:
-            # Calculate date range for the month
-            start_date, end_date = self._get_month_date_range(self.displayed_year, self.displayed_month)
-                
-            # Queue the fetch in background
-            self.worker.add_task(
-                "fetch_month",
-                self.calendar_manager.fetch_events_for_range,
-                callback=on_events_loaded,
-                error_callback=on_fetch_error,
-                start_date=start_date,
-                end_date=end_date
-            )
-                
+        # Calculate date range for the month
+        start_date, end_date = self._get_month_date_range(self.displayed_year, self.displayed_month)
+            
+        # Queue the fetch in background
+        self.worker.add_task(
+            "fetch_month",
+            self.calendar_manager.fetch_events_for_range,
+            callback=on_events_loaded,
+            error_callback=on_fetch_error,
+            start_date=start_date,
+            end_date=end_date
+        )
+            
         # Fetch holidays in background
         self._fetch_holidays_for_month()
             
@@ -1984,13 +1982,17 @@ class TodoAppUI(ctk.CTk):
     
     def _configure_cell_appearance(self, cell_data, current_date, day_num, today):
         """Configure the appearance of a calendar cell based on date type."""
-        # Set basic appearance
         if current_date == today:
-            # Highlight today's cell
+            # Highlight today's cell with a subtle background and border
             cell_data['frame'].configure(fg_color="#2D2D4D", border_color=HIGHLIGHT_COLOR)
-            cell_data['day_label'].configure(text=str(day_num), font=("Helvetica Neue", 12, "bold"))
+            cell_data['day_label'].configure(text=str(day_num), font=("Helvetica Neue", 12, "bold"), 
+                                           text_color="#FFFFFF")
+            # Make sure the task container is transparent to show events
+            if 'tasks_frame' in cell_data:
+                cell_data['tasks_frame'].configure(fg_color="transparent")
         else:
-            cell_data['frame'].configure(fg_color=BACKGROUND_COLOR)
+            # Normal appearance for other days
+            cell_data['frame'].configure(fg_color=BACKGROUND_COLOR, border_color="#333344")
             cell_data['day_label'].configure(text=str(day_num), font=FONT_LABEL)
     
     def prev_month(self):
