@@ -719,13 +719,11 @@ class TaskDialog(ctk.CTkToplevel):
             delete_btn.grid(row=0, column=0, padx=10)
             confirm_btn = ctk.CTkButton(btn_frame, text="Save", font=FONT_LABEL, command=self.confirm)
             confirm_btn.grid(row=0, column=1, padx=10)
-            cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", font=FONT_LABEL, command=self.destroy)
-            cancel_btn.grid(row=0, column=2, padx=10)
+
         else:
             confirm_btn = ctk.CTkButton(btn_frame, text="Create", font=FONT_LABEL, command=self.confirm)
             confirm_btn.grid(row=0, column=0, padx=10)
-            cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", font=FONT_LABEL, command=self.destroy)
-            cancel_btn.grid(row=0, column=1, padx=10)
+
             
     def delete_task(self):
         """Delete the current task."""
@@ -1419,21 +1417,19 @@ class TodoAppUI(ctk.CTk):
         return self.calendar_manager.cache.tasks_by_date.copy()
 
     def _update_monthly_view_data(self, search_term=""):
-        """Updates the existing monthly view widgets with data for the current month."""
+        """Update the monthly view with data for the current month."""
+        # Make sure calendar cells exist
         if not self.calendar_cells:
             self._create_monthly_view_structure()
-            
-        # Update month/year header label
-        if self.month_year_label:
+        
+        # Update month header with current month name
+        if hasattr(self, 'month_year_label'):
             self.month_year_label.configure(text=f"{calendar.month_name[self.displayed_month]} {self.displayed_year}")
-
-        # Get data for the month
+        
+        # Get calendar for this month
         month_calendar = calendar.monthcalendar(self.displayed_year, self.displayed_month)
         
-        # Clear all cells first
-        self._clear_calendar_cells()
-        
-        # Set up calendar cell dates immediately while we load data
+        # Setup calendar cell dates (don't clear cells first anymore)
         self._setup_calendar_cell_dates(month_calendar)
         
         # Define callbacks for background loading
@@ -1517,21 +1513,23 @@ class TodoAppUI(ctk.CTk):
     
     def _fetch_holidays_for_month(self):
         """Fetch holidays for the current month in background."""
+        
         def on_holidays_loaded(holidays):
             # Update cells with holiday information
             for date, holiday_name in holidays.items():
-                # Only process holidays for the current month and year
-                if date.month != self.displayed_month or date.year != self.displayed_year:
-                    continue
-                    
-                # Find the cell for this date
+                # Find cell for this date
                 for row_idx, week in enumerate(calendar.monthcalendar(self.displayed_year, self.displayed_month)):
                     for col_idx, day_num in enumerate(week):
                         if day_num == date.day:
                             cell_data = self.calendar_cells.get((row_idx, col_idx))
                             if cell_data:
-                                self._add_holiday_to_cell(cell_data['tasks_frame'], holiday_name, 
-                                                         (self.displayed_year, self.displayed_month))
+                                # Check if holiday already exists
+                                current_holiday = cell_data['current_state']['holiday']
+                                if current_holiday != holiday_name:
+                                    # Update state and add holiday to cell
+                                    cell_data['current_state']['holiday'] = holiday_name
+                                    self._add_holiday_to_cell(cell_data['tasks_frame'], holiday_name, 
+                                                             (self.displayed_year, self.displayed_month))
         
         def on_holiday_error(error):
             print(f"Error fetching holidays: {str(error)}")
@@ -1616,6 +1614,26 @@ class TodoAppUI(ctk.CTk):
     
     def _add_holiday_to_cell(self, parent_frame, holiday_name, month_key=None):
         """Add a holiday indicator at the top of a cell."""
+        # Check if holiday already exists with the same name
+        for widget in parent_frame.winfo_children():
+            if (isinstance(widget, ctk.CTkFrame) and 
+                widget.cget("fg_color") == "#2C3D4D" and 
+                hasattr(widget, 'holiday_name') and
+                widget.holiday_name == holiday_name):
+                # Holiday already exists, no need to recreate
+                return
+                
+        # Find the cell data for this parent_frame
+        cell_data = None
+        for data in self.calendar_cells.values():
+            if data['tasks_frame'] == parent_frame:
+                cell_data = data
+                break
+                
+        # Update cell state if found
+        if cell_data:
+            cell_data['current_state']['holiday'] = holiday_name
+        
         # Create holiday indicator frame at the top
         holiday_frame = ctk.CTkFrame(parent_frame, fg_color="#2C3D4D", corner_radius=4, height=20)
         holiday_frame.pack(fill="x", padx=2, pady=(0, 2), side="top")
@@ -1624,6 +1642,9 @@ class TodoAppUI(ctk.CTk):
         if month_key:
             holiday_frame.month_key = month_key
             
+        # Store holiday name for comparison
+        holiday_frame.holiday_name = holiday_name
+        
         # Holiday label
         holiday_label = ctk.CTkLabel(holiday_frame, 
                                 text=f"🎉 {holiday_name}", 
@@ -1645,13 +1666,26 @@ class TodoAppUI(ctk.CTk):
                     
                 if day_num == 0:  # Day not in current month
                     cell_data['frame'].configure(fg_color="#1E1E2F")  # Darker background
+                    cell_data['current_state']['is_current_month'] = False
+                    cell_data['current_state']['date'] = None
                     continue
                     
                 # Set up the cell for a day in the current month
                 current_date = datetime(self.displayed_year, self.displayed_month, day_num).date()
                 
-                # Configure cell appearance for today highlighting
-                self._configure_cell_appearance(cell_data, current_date, day_num, today)
+                # Track if date has changed
+                date_changed = cell_data['current_state']['date'] != current_date
+                today_changed = (current_date == today) != cell_data['current_state']['is_today']
+                
+                # Update state
+                cell_data['current_state']['date'] = current_date
+                cell_data['current_state']['is_current_month'] = True
+                cell_data['current_state']['is_today'] = (current_date == today)
+                
+                # Only update the UI if the date has changed
+                if date_changed or today_changed:
+                    # Configure cell appearance for today highlighting
+                    self._configure_cell_appearance(cell_data, current_date, day_num, today)
                 
                 # Bind day label for creating tasks
                 cell_data['day_label'].bind("<Button-1>", lambda e, d=current_date: self.open_task_dialog_for_date(d))
@@ -1671,24 +1705,52 @@ class TodoAppUI(ctk.CTk):
                     continue
                     
                 if day_num == 0:  # Day not in current month
+                    # Update current state
+                    cell_data['current_state']['is_current_month'] = False
+                    cell_data['current_state']['date'] = None
+                    cell_data['current_state']['tasks'] = []
                     continue  # Skip - already set up in _setup_calendar_cell_dates
                     
                 # Set up the cell for a day in the current month
                 current_date = datetime(self.displayed_year, self.displayed_month, day_num).date()
                 
-                # Add tasks for the day
+                # Filter tasks for the day
                 tasks_today = tasks_by_date.get(current_date, [])
                 if search_term:
                     tasks_today = [t for t in tasks_today if search_term.lower() in t.summary.lower()]
+                
+                # Get task IDs for state comparison
+                task_ids = [getattr(t, 'task_id', None) for t in tasks_today]
+                current_task_ids = [getattr(t, 'task_id', None) for t in cell_data['current_state']['tasks']]
+                
+                # Only update if the tasks have changed
+                tasks_changed = set(task_ids) != set(current_task_ids)
+                date_changed = cell_data['current_state']['date'] != current_date
+                today_changed = (current_date == today) != cell_data['current_state']['is_today']
+                
+                # Update if anything has changed
+                if tasks_changed or date_changed or today_changed:
+                    # Update state
+                    cell_data['current_state']['date'] = current_date
+                    cell_data['current_state']['tasks'] = tasks_today
+                    cell_data['current_state']['is_current_month'] = True
+                    cell_data['current_state']['is_today'] = (current_date == today)
                     
-                if tasks_today:
-                    # Clear existing task widgets first
-                    for widget in cell_data['tasks_frame'].winfo_children():
-                        if not isinstance(widget, ctk.CTkFrame) or not widget.cget("fg_color") == "#2C3D4D":
-                            # Keep holiday frames (blue background)
-                            widget.destroy()
-                            
-                    self._add_tasks_to_cell(cell_data['tasks_frame'], tasks_today, MAX_TASKS_PER_CELL)
+                    # Update today highlighting if needed
+                    if date_changed or today_changed:
+                        self._configure_cell_appearance(cell_data, current_date, day_num, today)
+                    
+                    # Update tasks if needed
+                    if tasks_changed:
+                        # Clear existing task widgets first (but keep holiday frames)
+                        for widget in cell_data['tasks_frame'].winfo_children():
+                            if not isinstance(widget, ctk.CTkFrame) or not widget.cget("fg_color") == "#2C3D4D":
+                                # Keep holiday frames (blue background)
+                                widget.destroy()
+                        
+                        # Add tasks
+                        if tasks_today:
+                            self._add_tasks_to_cell(cell_data['tasks_frame'], tasks_today, MAX_TASKS_PER_CELL)
             row_idx += 1
 
     def _setup_navbar(self):
@@ -1888,19 +1950,38 @@ class TodoAppUI(ctk.CTk):
             'day_label': day_label,
             'special_label': special_label,
             'tasks_frame': tasks_frame,
-            'current_state': None
+            'current_state': {
+                'date': None,
+                'tasks': [],
+                'holiday': None,
+                'is_current_month': False,
+                'is_today': False
+            }
         }
         
     def _clear_calendar_cells(self):
         """Clear all calendar cells before updating."""
         for cell_key, cell_data in self.calendar_cells.items():
+            # Reset the UI elements
             cell_data['day_label'].configure(text="")
             cell_data['special_label'].configure(text="")
-            # Clear ALL widgets in the tasks frame, including holiday frames
+            
+            # Clear all widgets in the tasks frame
             for widget in cell_data['tasks_frame'].winfo_children():
                 widget.destroy()
+                
+            # Reset visual appearance
             cell_data['frame'].configure(fg_color=BACKGROUND_COLOR, border_color="#333344")
             
+            # Reset the state tracking
+            cell_data['current_state'] = {
+                'date': None,
+                'tasks': [],
+                'holiday': None,
+                'is_current_month': False,
+                'is_today': False
+            }
+    
     def _configure_cell_appearance(self, cell_data, current_date, day_num, today):
         """Configure the appearance of a calendar cell based on date type."""
         # Set basic appearance
