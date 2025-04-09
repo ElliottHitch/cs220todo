@@ -20,13 +20,18 @@ calendar.setfirstweekday(6)
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 TOKEN_FILE = 'token.json'
 CREDENTIALS_FILE = 'credentials.json'
+DEFAULT_CALENDAR_ID = 'primary'
+API_MAX_RESULTS = 50
 
 # Color Theme
 BACKGROUND_COLOR = "#1E1E2F"    
 NAV_BG_COLOR = "#2A2A3B"       
 DROPDOWN_BG_COLOR = "#252639"  
 CARD_COLOR = "#1F6AA5"        
-TEXT_COLOR = "#E0E0E0"        
+TEXT_COLOR = "#E0E0E0"
+ERROR_COLOR = "#FF5555"
+SUCCESS_COLOR = "#55FF55"
+HIGHLIGHT_COLOR = "#6060A0"
 
 # Fonts
 FONT_HEADER = ("Helvetica Neue", 18, "bold")
@@ -36,32 +41,31 @@ FONT_DAY = ("Helvetica Neue", 12, "bold")
 FONT_DATE = ("Helvetica Neue", 18, "bold")
 PADDING = 10
 
+# UI Constants
+DEFAULT_ALERT_DURATION = 3000
+DEFAULT_ERROR_DURATION = 4000
+DEFAULT_DIALOG_WIDTH = 400
+DEFAULT_DIALOG_HEIGHT = 500
+DEFAULT_WINDOW_SIZE = "1200x1000"
+MAX_TASKS_PER_CELL = 3
+
 # HELPER FUNCTIONS
 def convert_to_24(hour_str, period):
     """Convert 12-hour time format to 24-hour format."""
     hour = int(hour_str)
-    if period == "AM":
-        return 0 if hour == 12 else hour
-    else:  # PM
-        return hour if hour == 12 else hour + 12
+    return 0 if hour == 12 and period == "AM" else (hour if period == "AM" or hour == 12 else hour + 12)
 
 def convert_from_24(hour_24_str):
     """Convert 24-hour time format to 12-hour format with AM/PM."""
     hour_24 = int(hour_24_str)
-    if hour_24 == 0:
-        return 12, "AM"
-    elif hour_24 < 12:
-        return hour_24, "AM"
-    elif hour_24 == 12:
-        return 12, "PM"
-    else:
-        return hour_24 - 12, "PM"
+    if hour_24 == 0: return 12, "AM"
+    elif hour_24 < 12: return hour_24, "AM"
+    elif hour_24 == 12: return 12, "PM"
+    else: return hour_24 - 12, "PM"
 
 def utc_to_local(utc_str):
     """Convert UTC datetime string to local datetime object."""
-    utc_dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
-    local_dt = utc_dt.astimezone()
-    return local_dt
+    return datetime.fromisoformat(utc_str.replace("Z", "+00:00")).astimezone()
 
 def local_to_utc(local_dt):
     """Convert local datetime object to UTC datetime object."""
@@ -95,11 +99,8 @@ def parse_event_datetime(event, field='start', as_date=False):
             return local_date
             
         # For all-day events, start is beginning of day, end is end of day
-        if field == 'start':
-            local_dt = datetime.combine(local_date, datetime.min.time())
-        else:  # field == 'end'
-            local_dt = datetime.combine(local_date, datetime.max.time())
-            
+        local_dt = datetime.combine(local_date, 
+                                    datetime.min.time() if field == 'start' else datetime.max.time())
         # Make timezone-aware
         return local_dt.astimezone().astimezone(timezone.utc)
         
@@ -132,8 +133,6 @@ class CacheManager:
             if event_id:
                 self.events_by_month[month_key] = [e for e in self.events_by_month[month_key] 
                                                   if e.get('id') != event_id]
-                
-                # Add to event IDs set
                 self.event_ids.add(event_id)
                 
             # Add the new/updated event
@@ -179,22 +178,15 @@ class CacheManager:
             # Remove event IDs from this month
             if month_key in self.events_by_month:
                 for event in self.events_by_month[month_key]:
-                    event_id = event.get('id')
-                    if event_id:
-                        self.event_ids.discard(event_id)
+                    self.event_ids.discard(event.get('id'))
                 del self.events_by_month[month_key]
                 
             if month_key in self.holidays_by_month:
                 del self.holidays_by_month[month_key]
                 
-            # Also clear tasks for this month from tasks_by_date
-            dates_to_remove = []
-            for date in self.tasks_by_date:
-                if date.year == year and date.month == month:
-                    dates_to_remove.append(date)
-                    
-            for date in dates_to_remove:
-                del self.tasks_by_date[date]
+            # Clear tasks for this month
+            self.tasks_by_date = {date: tasks for date, tasks in self.tasks_by_date.items() 
+                                 if date.year != year or date.month != month}
                 
             # Remove this range from fetched ranges
             self.fetched_ranges.discard(month_key)
@@ -280,9 +272,7 @@ class GoogleAuthService:
         """Get an authenticated Google Calendar service."""
         if self.service is not None:
             return self.service
-            
-        creds = self._get_credentials()
-        self.service = build('calendar', 'v3', credentials=creds)
+        self.service = build('calendar', 'v3', credentials=self._get_credentials())
         return self.service
 
     def _get_credentials(self):
@@ -354,7 +344,7 @@ class CalendarManager:
         except Exception as e:
             print(f"Error ensuring valid token: {str(e)}")
 
-    def fetch_events(self, calendar_id='primary', max_results=50, page_token=None, 
+    def fetch_events(self, calendar_id=DEFAULT_CALENDAR_ID, max_results=API_MAX_RESULTS, page_token=None, 
                      start_date=None, end_date=None):
         """Fetch events from Google Calendar with pagination support."""
         self._ensure_valid_token()
@@ -392,7 +382,7 @@ class CalendarManager:
             print(f"Error fetching events: {str(e)}")
             return [], None
     
-    def fetch_events_for_range(self, start_date, end_date, calendar_id='primary'):
+    def fetch_events_for_range(self, start_date, end_date, calendar_id=DEFAULT_CALENDAR_ID):
         """Fetch all events within a date range, using the cache if available."""
         if isinstance(start_date, str):
             start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
@@ -408,43 +398,30 @@ class CalendarManager:
         
         try:
             self._ensure_valid_token()
-            
             month_keys = self._get_month_keys_in_range(start_date, end_date)
             
+            # Use cached data if all months are cached
             all_cached = all(self.cache.month_is_cached(*month_key) for month_key in month_keys)
-            
             if all_cached:
-                # Collect events from all relevant months
-                all_events = []
-                for month_key in month_keys:
-                    events = self.cache.get_events_for_month(*month_key)
-                    for event in events:
-                        event_start = parse_event_datetime(event, field='start')
-                        if start_date <= event_start <= end_date:
-                            all_events.append(event)
-                return all_events
+                return [event for month_key in month_keys 
+                       for event in self.cache.get_events_for_month(*month_key) 
+                       if start_date <= parse_event_datetime(event, field='start') <= end_date]
             
-            # Identify uncached months
+            # Get data from cached months
+            cached_events = [event for month_key in month_keys 
+                            if self.cache.month_is_cached(*month_key)
+                            for event in self.cache.get_events_for_month(*month_key)
+                            if start_date <= parse_event_datetime(event, field='start') <= end_date]
+            
+            # Fetch uncached months
             uncached_months = [m for m in month_keys if not self.cache.month_is_cached(*m)]
-            
-            # Get events from cached months
-            cached_events = []
-            for month_key in [m for m in month_keys if m not in uncached_months]:
-                events = self.cache.get_events_for_month(*month_key)
-                for event in events:
-                    event_start = parse_event_datetime(event, field='start')
-                    if start_date <= event_start <= end_date:
-                        cached_events.append(event)
-            
-            # Fetch events for uncached months
             new_events = []
+            
             for month_key in uncached_months:
                 year, month = month_key
                 month_start = datetime(year, month, 1, tzinfo=timezone.utc)
-                if month == 12:
-                    month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
-                else:
-                    month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+                month_end = (datetime(year + 1, 1, 1, tzinfo=timezone.utc) if month == 12 
+                            else datetime(year, month + 1, 1, tzinfo=timezone.utc)) - timedelta(seconds=1)
                 
                 fetch_start = max(month_start, start_date)
                 fetch_end = min(month_end, end_date)
@@ -452,20 +429,18 @@ class CalendarManager:
                 month_events = []
                 next_token = None
                 
+                # Fetch all pages of results
                 while True:
                     batch, next_token = self.fetch_events(
                         calendar_id=calendar_id,
-                        max_results=50,
+                        max_results=API_MAX_RESULTS,
                         page_token=next_token,
                         start_date=fetch_start,
                         end_date=fetch_end
                     )
-                    
                     if not batch:
                         break
-                        
                     month_events.extend(batch)
-                    
                     if not next_token:
                         break
                 
@@ -475,16 +450,9 @@ class CalendarManager:
                 new_events.extend(month_events)
             
             # Combine cached and new events, avoiding duplicates
-            all_events = cached_events.copy()
-            existing_ids = {event.get('id') for event in cached_events if event.get('id')}
-            
-            for event in new_events:
-                event_id = event.get('id')
-                if event_id and event_id not in existing_ids:
-                    all_events.append(event)
-                    existing_ids.add(event_id)
-            
-            return all_events
+            existing_ids = set(event.get('id') for event in cached_events if event.get('id'))
+            return cached_events + [event for event in new_events 
+                                  if event.get('id') and event.get('id') not in existing_ids]
             
         except Exception as e:
             print(f"Error fetching events for range: {str(e)}")
@@ -499,15 +467,14 @@ class CalendarManager:
         current = (start_date.year, start_date.month)
         end = (end_date.year, end_date.month)
         
-        month_keys.append(current)
-        while current != end:
-            year, month = current
-            if month == 12:
-                current = (year + 1, 1)
-            else:
-                current = (year, month + 1)
+        while True:
             month_keys.append(current)
-            
+            if current == end:
+                break
+            # Move to next month
+            year, month = current
+            current = (year + 1, 1) if month == 12 else (year, month + 1)
+        
         return month_keys
     
     def clear_cache_for_month(self, year, month):
@@ -656,12 +623,10 @@ class TaskDialog(ctk.CTkToplevel):
             parent_width = master.winfo_width()
             parent_height = master.winfo_height()
             
-            self.dialog_width = 400
-            self.dialog_height = 500
-            x_pos = parent_x + (parent_width - self.dialog_width) // 2
-            y_pos = parent_y + (parent_height - self.dialog_height) // 2
+            x_pos = parent_x + (parent_width - DEFAULT_DIALOG_WIDTH) // 2
+            y_pos = parent_y + (parent_height - DEFAULT_DIALOG_HEIGHT) // 2
             
-            self.geometry(f"{self.dialog_width}x{self.dialog_height}+{x_pos}+{y_pos}")
+            self.geometry(f"{DEFAULT_DIALOG_WIDTH}x{DEFAULT_DIALOG_HEIGHT}+{x_pos}+{y_pos}")
             
         self.setup_initial_time()
         
@@ -706,6 +671,7 @@ class TaskDialog(ctk.CTkToplevel):
         time_frame = ctk.CTkFrame(self, fg_color=DROPDOWN_BG_COLOR)
         time_frame.pack(pady=5)
 
+        # Start time row
         start_label = ctk.CTkLabel(time_frame, text="Start Time (HH:MM):", font=FONT_LABEL, text_color=TEXT_COLOR)
         start_label.grid(row=0, column=0, padx=5, pady=5)
         self.start_hour = Spinbox(time_frame, from_=1, to=12, width=4, format="%02.0f", command=self._update_end_time)
@@ -716,6 +682,7 @@ class TaskDialog(ctk.CTkToplevel):
         self.start_period.set(self.initial_period)
         self.start_period.grid(row=0, column=3, padx=5, pady=5)
 
+        # End time row
         end_label = ctk.CTkLabel(time_frame, text="End Time (HH:MM):", font=FONT_LABEL, text_color=TEXT_COLOR)
         end_label.grid(row=1, column=0, padx=5, pady=5)
         self.end_hour = Spinbox(time_frame, from_=1, to=12, width=4, format="%02.0f")
@@ -726,10 +693,12 @@ class TaskDialog(ctk.CTkToplevel):
         self.end_period.set(self.initial_period)
         self.end_period.grid(row=1, column=3, padx=5, pady=5)
 
+        # Bind events for end time auto-update
         self.start_hour.bind("<KeyRelease>", self._update_end_time)
         self.start_min.bind("<KeyRelease>", self._update_end_time)
         self.start_period.configure(command=self._update_end_time)
 
+        # Initialize time values
         if self.task:
             self._init_time_fields()
         else:
@@ -737,21 +706,16 @@ class TaskDialog(ctk.CTkToplevel):
             self.start_hour.insert(0, f"{self.initial_hour:02d}")
             self.start_min.delete(0, "end")
             self.start_min.insert(0, f"{self.initial_min:02d}")
-            
             self._update_end_time()
 
+        # Buttons
         btn_frame = ctk.CTkFrame(self, fg_color=DROPDOWN_BG_COLOR)
         btn_frame.pack(pady=PADDING)
         
         if self.task and self.task.task_id:
-            delete_btn = ctk.CTkButton(
-                btn_frame, 
-                text="Delete", 
-                font=FONT_LABEL, 
-                fg_color="#AA3333", 
-                hover_color="#CC5555",
-                command=self.delete_task
-            )
+            delete_btn = ctk.CTkButton(btn_frame, text="Delete", font=FONT_LABEL, 
+                                      fg_color="#AA3333", hover_color="#CC5555",
+                                      command=self.delete_task)
             delete_btn.grid(row=0, column=0, padx=10)
             confirm_btn = ctk.CTkButton(btn_frame, text="Save", font=FONT_LABEL, command=self.confirm)
             confirm_btn.grid(row=0, column=1, padx=10)
@@ -759,9 +723,9 @@ class TaskDialog(ctk.CTkToplevel):
             cancel_btn.grid(row=0, column=2, padx=10)
         else:
             confirm_btn = ctk.CTkButton(btn_frame, text="Create", font=FONT_LABEL, command=self.confirm)
-        confirm_btn.grid(row=0, column=0, padx=10)
-        cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", font=FONT_LABEL, command=self.destroy)
-        cancel_btn.grid(row=0, column=1, padx=10)
+            confirm_btn.grid(row=0, column=0, padx=10)
+            cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", font=FONT_LABEL, command=self.destroy)
+            cancel_btn.grid(row=0, column=1, padx=10)
             
     def delete_task(self):
         """Delete the current task."""
@@ -816,7 +780,7 @@ class TaskDialog(ctk.CTkToplevel):
         """Validate input and create/update task."""
         summary = self.summary_entry.get().strip()
         if not summary:
-            self.master.show_alert("Task summary cannot be empty.", alert_type="error", duration=4000)
+            self.master.show_alert("Task summary cannot be empty.", alert_type="error", duration=DEFAULT_ERROR_DURATION)
             return
 
         date_str = self.calendar.get_date()
@@ -834,10 +798,10 @@ class TaskDialog(ctk.CTkToplevel):
             end_dt = local_to_utc(end_dt_local)
             
             if end_dt <= start_dt:
-                self.master.show_alert("End time must be after start time.", alert_type="error", duration=4000)
+                self.master.show_alert("End time must be after start time.", alert_type="error", duration=DEFAULT_ERROR_DURATION)
                 return
         except Exception as e:
-            self.master.show_alert(f"Invalid date or time: {str(e)}", alert_type="error", duration=4000)
+            self.master.show_alert(f"Invalid date or time: {str(e)}", alert_type="error", duration=DEFAULT_ERROR_DURATION)
             return
 
         if self.task:
@@ -859,38 +823,37 @@ class TodoAppUI(ctk.CTk):
         self.calendar_manager = calendar_manager
         
         self.title("To-Do List")
-        self.geometry("1200x1000")
+        self.geometry(DEFAULT_WINDOW_SIZE)
         self.configure(fg_color=BACKGROUND_COLOR)
         
         self.current_view = "daily"
-        
         today = datetime.now().date()
-        self.displayed_year = today.year
-        self.displayed_month = today.month
+        self.displayed_year, self.displayed_month = today.year, today.month
         
         self.preload_active = False
         self.ui_dirty = True
         self.loading = False
         self.worker = APIWorker(self)
-        
-        # Add lock for thread safety
-        self.data_lock = threading.Lock()
-        
+        self.data_lock = threading.Lock()  # Add lock for thread safety
         self.reminder_manager = ReminderManager(self)
+        
+        # Initialize view containers
         self.monthly_view_frame = None
         self.content_frame = None
         self.calendar_cells = {}
         self.rendered_days = set()
 
+        # Set up UI components
         self._setup_alert_area()
         self._setup_navbar()
         self._setup_main_layout()
         
+        # Start background processes
         self.refresh_events()
         self.reminder_manager.check_reminders()
-        
         self.check_token_refresh()
         
+        # Set up window close handler
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         
     def check_token_refresh(self):
@@ -1278,17 +1241,7 @@ class TodoAppUI(ctk.CTk):
                 self.month_containers[separator_frame.month_key]['expanded'] = False
 
     def _render_task(self, parent_frame, task, is_monthly_view=False, truncate_length=None):
-        """Shared method to render a task UI element consistently across views.
-        
-        Args:
-            parent_frame: Frame to add the task to
-            task: Task object to render
-            is_monthly_view: Whether rendering in monthly view (affects styling)
-            truncate_length: Length to truncate summary text (None = no truncation)
-            
-        Returns:
-            task_frame: The created task frame
-        """
+        """Shared method to render a task UI element consistently across views."""
         # Create task card with appropriate styling
         corner_radius = 3 if is_monthly_view else 6
         task_frame = ctk.CTkFrame(parent_frame, fg_color=CARD_COLOR, corner_radius=corner_radius)
@@ -1303,41 +1256,24 @@ class TodoAppUI(ctk.CTk):
         else:
             display_summary = summary
 
+        # Set common parameters based on view type
+        font = FONT_SMALL if is_monthly_view else FONT_LABEL
+        anchor = "w" if is_monthly_view else "center"
+        padding = (2, 1 if is_monthly_view else 0) if is_monthly_view else (4, 3)
+
         # Create task summary label
-        prefix = "• " if is_monthly_view else ""
-        task_label = ctk.CTkLabel(
-            task_frame, 
-            text=f"{prefix}{display_summary}", 
-            font=FONT_SMALL if is_monthly_view else FONT_LABEL, 
-            text_color=TEXT_COLOR,
-            anchor="w" if is_monthly_view else "center"
-        )
-        
-        # Pack with appropriate padding based on view
-        if is_monthly_view:
-            task_label.pack(anchor="w", fill="x", padx=2, pady=(1, 0))
-        else:
-            task_label.pack(fill="x", padx=4, pady=(3, 0))
+        task_label = ctk.CTkLabel(task_frame, text=f"{'• ' if is_monthly_view else ''}{display_summary}", 
+                           font=font, text_color=TEXT_COLOR, anchor=anchor)
+        task_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(padding[1], 0))
         
         # Create time label
-        time_label = ctk.CTkLabel(
-            task_frame,
-            text=time_str,
-            font=FONT_SMALL,
-            text_color=TEXT_COLOR,
-            anchor="w" if is_monthly_view else "center"
-        )
-        
-        # Pack with appropriate padding based on view
-        if is_monthly_view:
-            time_label.pack(anchor="w", fill="x", padx=2, pady=(0, 1))
-        else:
-            time_label.pack(fill="x", padx=4, pady=(0, 3))
+        time_label = ctk.CTkLabel(task_frame, text=time_str, font=FONT_SMALL, 
+                           text_color=TEXT_COLOR, anchor=anchor)
+        time_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(0, padding[1]))
         
         # Bind click events for editing
-        task_frame.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-        task_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-        time_label.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
+        for widget in (task_frame, task_label, time_label):
+            widget.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
         
         return task_frame
 
@@ -1347,26 +1283,24 @@ class TodoAppUI(ctk.CTk):
         task_frame = self._render_task(container, task)
         task_frame.pack(fill="x", pady=PADDING/3)
 
-    def _add_tasks_to_cell(self, parent_frame, tasks, max_tasks):
+    def _add_tasks_to_cell(self, parent_frame, tasks, max_tasks=MAX_TASKS_PER_CELL):
         """Helper to add tasks to a cell - separated for better readability."""
         # Clear all existing widgets first
         for widget in parent_frame.winfo_children():
             widget.destroy()
             
-        tasks_added_count = 0
-        for i, task in enumerate(tasks):
-            if i >= max_tasks:
-                more_label = ctk.CTkLabel(parent_frame, text=f"+ {len(tasks) - max_tasks} more", 
-                                       font=FONT_SMALL, text_color="#AAAAAA", anchor="w")
-                more_label.pack(anchor="w", fill="x", padx=2, pady=0)
-                break
-            
-            # Use the shared render method with monthly view settings
+        # Add tasks up to the limit
+        for i, task in enumerate(tasks[:max_tasks]):
             task_frame = self._render_task(parent_frame, task, is_monthly_view=True, truncate_length=14)
             task_frame.pack(fill="x", padx=1, pady=1)
-            tasks_added_count += 1
-            
-        return tasks_added_count
+        
+        # Show "more" indicator if needed
+        if len(tasks) > max_tasks:
+            more_label = ctk.CTkLabel(parent_frame, text=f"+ {len(tasks) - max_tasks} more", 
+                                   font=FONT_SMALL, text_color="#AAAAAA", anchor="w")
+            more_label.pack(anchor="w", fill="x", padx=2, pady=0)
+        
+        return min(len(tasks), max_tasks)
     
     def _create_day_header(self, parent_frame, day):
         """Create the date header for a day in daily view."""
@@ -1394,53 +1328,44 @@ class TodoAppUI(ctk.CTk):
     def open_task_dialog(self, task=None):
         """Open dialog to create new task or edit existing task."""
         def on_confirm(new_task):
+            # Prepare event data
+            event = {
+                'summary': new_task.summary,
+                'start': {'dateTime': new_task.start_dt.isoformat(), 'timeZone': 'UTC'},
+                'end': {'dateTime': new_task.end_dt.isoformat(), 'timeZone': 'UTC'}
+            }
+            
+            # Common success/error handlers
+            def on_success(result):
+                action = "updated" if task and task.task_id else "created"
+                if not task or not task.task_id:
+                    new_task.task_id = result.get('id')
+                self.show_alert(f"Task {action}: {new_task.summary}", duration=3000)
+                self.refresh_events()
+            
+            def on_error(error):
+                action = "update" if task and task.task_id else "add"
+                self.show_alert(f"Failed to {action} task: {str(error)}", alert_type="error", duration=DEFAULT_ERROR_DURATION)
+            
+            # Queue the API operation in the worker thread
             if task and task.task_id:
                 # Update existing task
-                updated_event = {
-                    'summary': new_task.summary,
-                    'start': {'dateTime': new_task.start_dt.isoformat(), 'timeZone': 'UTC'},
-                    'end': {'dateTime': new_task.end_dt.isoformat(), 'timeZone': 'UTC'}
-                }
-                
-                def on_update_success(result):
-                    self.show_alert(f"Task updated: {new_task.summary}", duration=3000)
-                    self.refresh_events()
-                
-                def on_update_error(error):
-                    self.show_alert(f"Failed to update task: {str(error)}", alert_type="error", duration=4000)
-                
-                # Queue the update in the worker thread
                 self.worker.add_task(
                     "update_task",
                     self.calendar_manager.update_event,
-                    callback=on_update_success,
-                    error_callback=on_update_error,
+                    callback=on_success,
+                    error_callback=on_error,
                     calendar_id='primary',
                     event_id=task.task_id,
-                    updated_event=updated_event
+                    updated_event=event
                 )
             else:
                 # Create new task
-                event = {
-                    'summary': new_task.summary,
-                    'start': {'dateTime': new_task.start_dt.isoformat(), 'timeZone': 'UTC'},
-                    'end': {'dateTime': new_task.end_dt.isoformat(), 'timeZone': 'UTC'}
-                }
-                
-                def on_create_success(result):
-                    new_task.task_id = result.get('id')
-                    self.show_alert(f"Task created: {new_task.summary}", duration=3000)
-                    self.refresh_events()
-                
-                def on_create_error(error):
-                    self.show_alert(f"Failed to add task: {str(error)}", alert_type="error", duration=4000)
-                
-                # Queue the creation in the worker thread
                 self.worker.add_task(
                     "create_task",
                     self.calendar_manager.add_event,
-                    callback=on_create_success,
-                    error_callback=on_create_error,
+                    callback=on_success,
+                    error_callback=on_error,
                     calendar_id='primary',
                     event=event
                 )
@@ -1479,20 +1404,15 @@ class TodoAppUI(ctk.CTk):
     def get_filtered_tasks_by_date(self, search_term=""):
         """Get tasks filtered by search term, organized by date."""
         tasks_by_date = self._get_tasks_by_date_dict()
-    
-        if search_term:
-            filtered = {}
-            search_term = search_term.lower()
-            
-            for date, tasks in tasks_by_date.items():
-                matching_tasks = [task for task in tasks if search_term in task.summary.lower()]
-                
-                if matching_tasks:
-                    filtered[date] = matching_tasks
-            
-            return filtered
+
+        if not search_term:
+            return tasks_by_date
         
-        return tasks_by_date
+        # Filter tasks by search term
+        search_term = search_term.lower()
+        return {date: [task for task in tasks if search_term in task.summary.lower()] 
+                for date, tasks in tasks_by_date.items() 
+                if any(search_term in task.summary.lower() for task in tasks)}
     
     def _get_tasks_by_date_dict(self):
         """Get tasks organized by date from the cache."""
@@ -1657,17 +1577,11 @@ class TodoAppUI(ctk.CTk):
     
     def _get_prev_month(self, year, month):
         """Get the previous month's year and month values."""
-        if month == 1:
-            return year - 1, 12
-        else:
-            return year, month - 1
+        return (year - 1, 12) if month == 1 else (year, month - 1)
     
     def _get_next_month(self, year, month):
         """Get the next month's year and month values."""
-        if month == 12:
-            return year + 1, 1
-        else:
-            return year, month + 1
+        return (year + 1, 1) if month == 12 else (year, month + 1)
             
     def _preload_month_data(self, year, month):
         """Preload data for a specific month."""
@@ -1828,14 +1742,11 @@ class TodoAppUI(ctk.CTk):
             btn = ctk.CTkButton(self.sidebar, text=btn_text, command=lambda x=btn_text: self.switch_view(x))
             btn.pack(pady=10, padx=10, fill="x")
             
-    def show_alert(self, message, alert_type="info", duration=3000):
+    def show_alert(self, message, alert_type="info", duration=DEFAULT_ALERT_DURATION):
         """Show an alert/notification message."""
-        if alert_type == "error":
-            self.alert_label.configure(text=message, text_color="#FF5555")
-        elif alert_type == "info":
-            self.alert_label.configure(text=message, text_color="#55FF55")
-        else:
-            self.alert_label.configure(text=message, text_color=TEXT_COLOR)
+        colors = {"error": ERROR_COLOR, "info": SUCCESS_COLOR}
+        self.alert_label.configure(text=message, 
+                                 text_color=colors.get(alert_type, TEXT_COLOR))
         self.alert_frame.pack(fill="x")
         self.after(duration, self.clear_alert)
 
@@ -1995,7 +1906,7 @@ class TodoAppUI(ctk.CTk):
         # Set basic appearance
         if current_date == today:
             # Highlight today's cell
-            cell_data['frame'].configure(fg_color="#2D2D4D", border_color="#6060A0")
+            cell_data['frame'].configure(fg_color="#2D2D4D", border_color=HIGHLIGHT_COLOR)
             cell_data['day_label'].configure(text=str(day_num), font=("Helvetica Neue", 12, "bold"))
         else:
             cell_data['frame'].configure(fg_color=BACKGROUND_COLOR)
