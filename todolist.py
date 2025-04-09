@@ -781,18 +781,10 @@ class TodoAppUI(ctk.CTk):
         """Show or hide loading indicator."""
         self.loading = is_loading
         if is_loading:
-            if not hasattr(self, 'loading_label'):
-                self.loading_label = ctk.CTkLabel(
-                    self.alert_frame, 
-                    text="Loading...", 
-                    font=FONT_LABEL, 
-                    text_color="#55AAFF"
-                )
-                self.loading_label.pack(side="right", padx=20, pady=5)
+            self.loading_label.pack(side="right", padx=20, pady=5)
             self.alert_frame.pack(fill="x")
         else:
-            if hasattr(self, 'loading_label'):
-                self.loading_label.pack_forget()
+            self.loading_label.pack_forget()
             if not self.alert_label.cget("text"):
                 self.alert_frame.pack_forget()
 
@@ -802,6 +794,17 @@ class TodoAppUI(ctk.CTk):
         self.alert_frame.pack(fill="x")
         self.alert_label = ctk.CTkLabel(self.alert_frame, text="", font=FONT_LABEL, text_color=TEXT_COLOR)
         self.alert_label.pack(side="left", padx=20, pady=5)
+        
+        # Create loading label once during initialization
+        self.loading_label = ctk.CTkLabel(
+            self.alert_frame, 
+            text="Loading...", 
+            font=FONT_LABEL, 
+            text_color="#55AAFF"
+        )
+        self.loading_label.pack(side="right", padx=20, pady=5)
+        self.loading_label.pack_forget()  # Initially hidden
+        
         self.alert_frame.pack_forget()
 
     def _check_scroll_position(self):
@@ -887,9 +890,6 @@ class TodoAppUI(ctk.CTk):
             # Update UI with what we have so far
             self._update_current_view()
         
-        # Start date for fetching (today)
-        start_date = datetime.now(timezone.utc)
-        
         # Queue the API call in the worker thread
         self.worker.add_task(
             "background_fetch",
@@ -898,8 +898,7 @@ class TodoAppUI(ctk.CTk):
             error_callback=on_error,
             calendar_id='primary',
             max_results=50,
-            page_token=page_token,
-            start_date=start_date
+            page_token=page_token
         )
     
     def _update_current_view(self):
@@ -2086,51 +2085,62 @@ class APIWorker:
         self.parent = parent
         self.queue = queue.Queue()
         self.running = True
+        self.event = threading.Event()
         self.thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.thread.start()
         
     def add_task(self, task_type, func, callback=None, error_callback=None, **kwargs):
-        """Add a task to the queue."""
+        """Add a task to the queue and signal the worker thread."""
         self.queue.put((task_type, func, callback, error_callback, kwargs))
+        self.event.set()  # Signal that there's work to do
         
     def _worker_loop(self):
-        """Main worker loop that processes queued tasks."""
+        """Main worker loop that processes queued tasks using event notification."""
         while self.running:
-            try:
-                task_type, func, callback, error_callback, kwargs = self.queue.get(timeout=0.5)
-                
+            # Wait for the event to be set (new task or shutdown)
+            self.event.wait()
+            
+            # Process all tasks in the queue
+            while not self.queue.empty() and self.running:
                 try:
-                    if task_type not in ['background_fetch', 'preload']:
-                        self.parent.after(0, lambda: self.parent.show_loading(True))
+                    task_type, func, callback, error_callback, kwargs = self.queue.get(block=False)
                     
-                    result = func(**kwargs)
-                    
-                    if callback:
-                        cb = callback
-                        res = result
-                        self.parent.after(0, lambda cb=cb, res=res: cb(res))
+                    try:
+                        if task_type not in ['background_fetch', 'preload']:
+                            self.parent.after(0, lambda: self.parent.show_loading(True))
                         
-                except Exception as e:
-                    print(f"Error in worker thread ({task_type}): {str(e)}")
-                    if error_callback:
-                        # Create a local copy of the error callback and error to avoid closure issues
-                        err_cb = error_callback
-                        err = e
-                        self.parent.after(0, lambda err_cb=err_cb, err=err: err_cb(err))
-                
-                finally:
-                    # Hide loading indicator
-                    if task_type not in ['background_fetch', 'preload']:
-                        self.parent.after(0, lambda: self.parent.show_loading(False))
-                    self.queue.task_done()
+                        result = func(**kwargs)
+                        
+                        if callback:
+                            cb = callback
+                            res = result
+                            self.parent.after(0, lambda cb=cb, res=res: cb(res))
+                            
+                    except Exception as e:
+                        print(f"Error in worker thread ({task_type}): {str(e)}")
+                        if error_callback:
+                            # Create a local copy of the error callback and error to avoid closure issues
+                            err_cb = error_callback
+                            err = e
+                            self.parent.after(0, lambda err_cb=err_cb, err=err: err_cb(err))
                     
-            except queue.Empty:
-                # No tasks in queue, continue waiting
-                pass
+                    finally:
+                        # Hide loading indicator
+                        if task_type not in ['background_fetch', 'preload']:
+                            self.parent.after(0, lambda: self.parent.show_loading(False))
+                        self.queue.task_done()
+                        
+                except queue.Empty:
+                    # Queue is empty now, rare case due to race condition
+                    break
+            
+            # Clear the event since we've processed all tasks
+            self.event.clear()
                 
     def stop(self):
         """Stop the worker thread."""
         self.running = False
+        self.event.set()  # Wake up the thread to check running state
         self.thread.join(timeout=1.0)
 
 # APPLICATION ENTRY POINT
