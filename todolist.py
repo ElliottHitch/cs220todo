@@ -1,10 +1,15 @@
 import os
 import calendar
+import sys
 from datetime import datetime, timezone, timedelta
-import customtkinter as ctk
-import pytz
-from tkinter import Spinbox
-from tkcalendar import Calendar
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLabel, QLineEdit, QPushButton, QFrame, QScrollArea, 
+    QCalendarWidget, QComboBox, QSpinBox, QDialog, QGridLayout,
+    QSplitter, QStackedWidget, QTabWidget, QMessageBox, QTimeEdit
+)
+from PyQt6.QtCore import Qt, QTimer, QDate, QTime, QDateTime, pyqtSignal, QThread, QSize, QObject, QPoint
+from PyQt6.QtGui import QColor, QPalette, QFont, QIcon
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -13,7 +18,6 @@ import threading
 import queue
 
 
-# Set calendar to use Sunday as the first day of the week
 calendar.setfirstweekday(6)
 
 # API Configuration
@@ -24,30 +28,91 @@ DEFAULT_CALENDAR_ID = 'primary'
 API_MAX_RESULTS = 50
 
 # Color Theme
-BACKGROUND_COLOR = "#1E1E2F"    
-NAV_BG_COLOR = "#2A2A3B"       
-DROPDOWN_BG_COLOR = "#252639"  
-CARD_COLOR = "#1F6AA5"        
+BACKGROUND_COLOR = "#1E1E2F"
+NAV_BG_COLOR = "#2A2A3B"
+DROPDOWN_BG_COLOR = "#252639"
+CARD_COLOR = "#1F6AA5"
 TEXT_COLOR = "#E0E0E0"
-ERROR_COLOR = "#FF5555"
-SUCCESS_COLOR = "#55FF55"
 HIGHLIGHT_COLOR = "#6060A0"
 
 # Fonts
-FONT_HEADER = ("Helvetica Neue", 18, "bold")
-FONT_LABEL = ("Helvetica Neue", 14)
-FONT_SMALL = ("Helvetica Neue", 12)
-FONT_DAY = ("Helvetica Neue", 12, "bold")
-FONT_DATE = ("Helvetica Neue", 18, "bold")
+FONT_HEADER = "Segoe UI Semibold"
+FONT_HEADER_SIZE = 18
+FONT_LABEL = "Segoe UI"
+FONT_LABEL_SIZE = 14
+FONT_SMALL = "Segoe UI"
+FONT_SMALL_SIZE = 12
+FONT_DAY = "Segoe UI Semibold"
+FONT_DAY_SIZE = 12
+FONT_DATE = "Segoe UI Semibold"
+FONT_DATE_SIZE = 18
 PADDING = 10
 
 # UI Constants
-DEFAULT_ALERT_DURATION = 3000
-DEFAULT_ERROR_DURATION = 4000
 DEFAULT_DIALOG_WIDTH = 400
 DEFAULT_DIALOG_HEIGHT = 500
-DEFAULT_WINDOW_SIZE = "1200x1000"
-MAX_TASKS_PER_CELL = 3
+DEFAULT_WINDOW_SIZE = (1200, 1000)
+MAX_TASKS_PER_CELL = 5
+
+# StyleSheets
+MAIN_STYLE = f"""
+QMainWindow, QDialog {{
+    background-color: {BACKGROUND_COLOR};
+}}
+QScrollArea {{
+    background-color: {BACKGROUND_COLOR};
+    border: none;
+}}
+QLabel {{
+    color: {TEXT_COLOR};
+}}
+QPushButton {{
+    background-color: {CARD_COLOR};
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 16px;
+    font-weight: bold;
+}}
+QPushButton:hover {{
+    background-color: #2980b9;
+}}
+QLineEdit {{
+    background-color: {DROPDOWN_BG_COLOR};
+    color: {TEXT_COLOR};
+    border: 1px solid #3D3D5C;
+    border-radius: 4px;
+    padding: 6px;
+}}
+QFrame[frameShape="4"] {{
+    color: #3D3D5C;
+}}
+QCalendarWidget {{
+    background-color: {DROPDOWN_BG_COLOR};
+}}
+QCalendarWidget QWidget {{
+    alternate-background-color: {DROPDOWN_BG_COLOR};
+}}
+QTimeEdit {{
+    background-color: {DROPDOWN_BG_COLOR};
+    color: {TEXT_COLOR};
+    border: 1px solid #3D3D5C;
+    border-radius: 4px;
+    padding: 6px;
+}}
+QComboBox {{
+    background-color: {DROPDOWN_BG_COLOR};
+    color: {TEXT_COLOR};
+    border: 1px solid #3D3D5C;
+    border-radius: 4px;
+    padding: 6px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {DROPDOWN_BG_COLOR};
+    color: {TEXT_COLOR};
+    selection-background-color: {HIGHLIGHT_COLOR};
+}}
+"""
 
 # HELPER FUNCTIONS
 def convert_to_24(hour_str, period):
@@ -63,119 +128,152 @@ def convert_from_24(hour_24_str):
     elif hour_24 == 12: return 12, "PM"
     else: return hour_24 - 12, "PM"
 
-def utc_to_local(utc_str):
-    """Convert UTC datetime string to local datetime object."""
-    return datetime.fromisoformat(utc_str.replace("Z", "+00:00")).astimezone()
-
 def local_to_utc(local_dt):
     """Convert local datetime object to UTC datetime object."""
     return local_dt.astimezone(timezone.utc)
 
+def format_datetime(dt, format_type='time', include_minutes=True):
+    """Format datetime according to specified format type.
+    
+    Args:
+        dt: The datetime object to format
+        format_type: One of 'time', 'weekday', 'day', 'month_year'
+        include_minutes: For 'time' format, whether to include minutes
+    """
+    if format_type == 'time':
+        if include_minutes:
+            return dt.strftime('%I:%M%p').lstrip('0').replace(':00', '').lower()
+        else:
+            return dt.strftime('%I%p').lstrip('0').lower()
+    elif format_type == 'weekday':
+        return dt.strftime("%a").upper()
+    elif format_type == 'day':
+        return dt.strftime("%d")
+    elif format_type == 'month_year':
+        return f"{calendar.month_name[dt.month]} {dt.year}"
+    else:
+        return str(dt)
+
 def format_task_time(start_dt, end_dt):
     """Format task start and end time consistently."""
-    local_start = start_dt.astimezone()
-    local_end = end_dt.astimezone()
-    
-    if local_start.hour == 0 and local_start.minute == 0 and local_end.hour == 23 and local_end.minute == 59:
-        return "All Day"
-    else:
-        start_str = local_start.strftime('%I:%M %p').lstrip('0')
-        end_str = local_end.strftime('%I:%M %p').lstrip('0')
-        return f"{start_str} - {end_str}"
+    start_str = format_datetime(start_dt.astimezone(), 'time')
+    end_str = format_datetime(end_dt.astimezone(), 'time')
+    return f"{start_str}-{end_str}"
+
+def format_iso_for_api(dt):
+    """Format datetime as ISO format for Google API."""
+    return dt.isoformat().replace('+00:00', 'Z')
+
+def parse_iso_from_api(iso_str):
+    """Parse ISO datetime string from Google API."""
+    return datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
 
 def parse_event_datetime(event, field='start', as_date=False):
     """Parse datetime from a Google Calendar event field."""
     if field not in event:
-        return datetime.now(timezone.utc)  # Fallback
+        return datetime.now(timezone.utc)
         
     if 'dateTime' in event[field]:
-        # Regular event with specific time
-        dt = datetime.fromisoformat(event[field]['dateTime'].replace('Z', '+00:00'))
+        dt = parse_iso_from_api(event[field]['dateTime'])
         return dt.date() if as_date else dt
     elif 'date' in event[field]:
-        # All-day event
         local_date = datetime.fromisoformat(event[field]['date']).date()
         if as_date:
             return local_date
             
-        # For all-day events, start is beginning of day, end is end of day
-        local_dt = datetime.combine(local_date, 
-                                    datetime.min.time() if field == 'start' else datetime.max.time())
-        # Make timezone-aware
-        return local_dt.astimezone().astimezone(timezone.utc)
-        
-    return datetime.now(timezone.utc)  # Fallback
+        local_tz = datetime.now().astimezone().tzinfo
 
+        if field == 'start':
+            local_dt = datetime.combine(local_date, datetime.min.time()).replace(tzinfo=local_tz)
+        else:
+            local_dt = datetime.combine(local_date, datetime.max.time()).replace(tzinfo=local_tz)
+        
+        return local_dt.astimezone(timezone.utc)
+        
+    return datetime.now(timezone.utc)
+
+# TASK AND REMINDER CLASSES
+class Task:
+    """Represents a task/event with start and end times."""
+    def __init__(self, summary, start_dt, end_dt, task_id=None, reminder_minutes=10, status='Pending'):
+        self.summary = summary
+        self.start_dt = start_dt
+        self.end_dt = end_dt
+        self.task_id = task_id
+        self.reminder_minutes = reminder_minutes
+        self.status = status
 
 # GOOGLE API CLASSES
 class CacheManager:
     """Centralized cache manager for all calendar data."""
     def __init__(self):
-        self.events_by_month = {}  # {(year, month): [events]}
-        self.tasks_by_date = {}    # {date: [tasks]}
-        self.holidays_by_month = {} # {(year, month): {date: holiday_name}}
+        self.events_by_month = {}
+        self.tasks_by_date = {}
+        self.holidays_by_month = {}
         self.cache_lock = threading.Lock()
         self.fetched_ranges = set()
-        self.event_ids = set()  # Set to track all event IDs
+        self.event_ids = set()
         
     def add_event(self, event):
         """Add or update an event in the cache."""
         with self.cache_lock:
-            event_start = parse_event_datetime(event, field='start')
-            month_key = (event_start.year, event_start.month)
+            self._add_event_no_lock(event)
+    
+    def _add_event_no_lock(self, event):
+        """Add an event to the cache without acquiring the lock."""
+        event_start = parse_event_datetime(event, field='start')
+        month_key = (event_start.year, event_start.month)
+        
+        if month_key not in self.events_by_month:
+            self.events_by_month[month_key] = []
             
-            # Update events cache
-            if month_key not in self.events_by_month:
-                self.events_by_month[month_key] = []
-                
-            # Remove existing event with same ID if present
-            event_id = event.get('id')
-            if event_id:
-                self.events_by_month[month_key] = [e for e in self.events_by_month[month_key] 
-                                                  if e.get('id') != event_id]
-                self.event_ids.add(event_id)
-                
-            # Add the new/updated event
-            self.events_by_month[month_key].append(event)
+        event_id = event.get('id')
+        if event_id:
+            self.events_by_month[month_key] = [e for e in self.events_by_month[month_key] 
+                                              if e.get('id') != event_id]
+            self.event_ids.add(event_id)
             
-            # Also update the tasks cache
-            task = self._convert_event_to_task(event)
-            if task:
+        self.events_by_month[month_key].append(event)
+        
+        task = self._convert_event_to_task(event)
+        if task:
+            if 'date' in event.get('start', {}):
+                local_date = datetime.fromisoformat(event['start']['date']).date()
+            else:
                 local_date = task.start_dt.astimezone().date()
-                if local_date not in self.tasks_by_date:
-                    self.tasks_by_date[local_date] = []
-                    
-                # Remove existing task with same ID
-                self.tasks_by_date[local_date] = [t for t in self.tasks_by_date[local_date] 
-                                                if getattr(t, 'task_id', None) != event_id]
                 
-                # Add the new task
-                self.tasks_by_date[local_date].append(task)
+            if local_date not in self.tasks_by_date:
+                self.tasks_by_date[local_date] = []
+                
+            self.tasks_by_date[local_date] = [t for t in self.tasks_by_date[local_date] 
+                                            if getattr(t, 'task_id', None) != event_id]
+            
+            self.tasks_by_date[local_date].append(task)
     
     def add_events(self, events):
         """Add multiple events to the cache at once."""
-        for event in events:
-            self.add_event(event)
-                
+        if not events:
+            return
+            
+        with self.cache_lock:
+            for event in events:
+                self._add_event_no_lock(event)
+    
     def delete_event(self, event_id):
         """Delete an event from all caches."""
         with self.cache_lock:
-            # Remove from events cache
             for month_key, events_list in list(self.events_by_month.items()):
                 self.events_by_month[month_key] = [e for e in events_list if e.get('id') != event_id]
             
-            # Remove from tasks cache
             for date, tasks_list in list(self.tasks_by_date.items()):
                 self.tasks_by_date[date] = [t for t in tasks_list if getattr(t, 'task_id', None) != event_id]
             
-            # Remove from event IDs set
             self.event_ids.discard(event_id)
     
     def clear_month(self, year, month):
         """Clear the cache for a specific month."""
         month_key = (year, month)
         with self.cache_lock:
-            # Remove event IDs from this month
             if month_key in self.events_by_month:
                 for event in self.events_by_month[month_key]:
                     self.event_ids.discard(event.get('id'))
@@ -184,11 +282,9 @@ class CacheManager:
             if month_key in self.holidays_by_month:
                 del self.holidays_by_month[month_key]
                 
-            # Clear tasks for this month
             self.tasks_by_date = {date: tasks for date, tasks in self.tasks_by_date.items() 
                                  if date.year != year or date.month != month}
                 
-            # Remove this range from fetched ranges
             self.fetched_ranges.discard(month_key)
             
     def has_event_id(self, event_id):
@@ -200,12 +296,12 @@ class CacheManager:
         """Get all events for a specific month."""
         month_key = (year, month)
         with self.cache_lock:
-            return self.events_by_month.get(month_key, [])[:]  # Return a copy
+            return self.events_by_month.get(month_key, [])[:]
     
     def get_tasks_for_date(self, date):
         """Get all tasks for a specific date."""
         with self.cache_lock:
-            return self.tasks_by_date.get(date, [])[:]  # Return a copy
+            return self.tasks_by_date.get(date, [])[:]
     
     def get_tasks_for_month(self, year, month):
         """Get all tasks for a specific month, organized by date."""
@@ -213,7 +309,7 @@ class CacheManager:
         with self.cache_lock:
             for date, tasks in self.tasks_by_date.items():
                 if date.year == year and date.month == month:
-                    result[date] = tasks[:]  # Copy the list
+                    result[date] = tasks[:]
         return result
     
     def get_all_tasks(self):
@@ -228,7 +324,7 @@ class CacheManager:
         """Get holidays for a specific month."""
         month_key = (year, month)
         with self.cache_lock:
-            return self.holidays_by_month.get(month_key, {}).copy()  # Return a copy
+            return self.holidays_by_month.get(month_key, {}).copy()
     
     def add_holidays(self, year, month, holidays):
         """Add holidays for a month to the cache."""
@@ -323,8 +419,7 @@ class GoogleAuthService:
                     print(f"Error refreshing token: {str(e)}")
                     return False
         
-        return False
-
+        return False 
 
 class CalendarManager:
     """Manages interactions with Google Calendar API."""
@@ -352,10 +447,10 @@ class CalendarManager:
         if not start_date:
             start_date = datetime.now(timezone.utc)
         
-        time_min = start_date.isoformat().replace('+00:00', 'Z')
+        time_min = format_iso_for_api(start_date)
         time_max = None
         if end_date:
-            time_max = end_date.isoformat().replace('+00:00', 'Z')
+            time_max = format_iso_for_api(end_date)
         
         params = {
             'calendarId': calendar_id,
@@ -385,9 +480,9 @@ class CalendarManager:
     def fetch_events_for_range(self, start_date, end_date, calendar_id=DEFAULT_CALENDAR_ID):
         """Fetch all events within a date range, using the cache if available."""
         if isinstance(start_date, str):
-            start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            start_date = parse_iso_from_api(start_date)
         if isinstance(end_date, str):
-            end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            end_date = parse_iso_from_api(end_date)
         
         range_id = (calendar_id, start_date.isoformat(), end_date.isoformat())
         
@@ -400,20 +495,17 @@ class CalendarManager:
             self._ensure_valid_token()
             month_keys = self._get_month_keys_in_range(start_date, end_date)
             
-            # Use cached data if all months are cached
             all_cached = all(self.cache.month_is_cached(*month_key) for month_key in month_keys)
             if all_cached:
                 return [event for month_key in month_keys 
                        for event in self.cache.get_events_for_month(*month_key) 
                        if start_date <= parse_event_datetime(event, field='start') <= end_date]
             
-            # Get data from cached months
             cached_events = [event for month_key in month_keys 
                             if self.cache.month_is_cached(*month_key)
                             for event in self.cache.get_events_for_month(*month_key)
                             if start_date <= parse_event_datetime(event, field='start') <= end_date]
             
-            # Fetch uncached months
             uncached_months = [m for m in month_keys if not self.cache.month_is_cached(*m)]
             new_events = []
             
@@ -429,7 +521,6 @@ class CalendarManager:
                 month_events = []
                 next_token = None
                 
-                # Fetch all pages of results
                 while True:
                     batch, next_token = self.fetch_events(
                         calendar_id=calendar_id,
@@ -444,12 +535,10 @@ class CalendarManager:
                     if not next_token:
                         break
                 
-                # Update cache with new events
                 self.cache.add_events(month_events)
                 self.cache.mark_range_fetched(year, month)
                 new_events.extend(month_events)
             
-            # Combine cached and new events, avoiding duplicates
             existing_ids = set(event.get('id') for event in cached_events if event.get('id'))
             return cached_events + [event for event in new_events 
                                   if event.get('id') and event.get('id') not in existing_ids]
@@ -471,7 +560,6 @@ class CalendarManager:
             month_keys.append(current)
             if current == end:
                 break
-            # Move to next month
             year, month = current
             current = (year + 1, 1) if month == 12 else (year, month + 1)
         
@@ -491,7 +579,6 @@ class CalendarManager:
                 body=event
             ).execute()
             
-            # Update both caches
             self.cache.add_event(result)
             return result
         except Exception as e:
@@ -509,7 +596,6 @@ class CalendarManager:
                 body=updated_event
             ).execute()
             
-            # Update cache
             self.cache.add_event(result)
             return result
         except Exception as e:
@@ -526,7 +612,6 @@ class CalendarManager:
                 eventId=event_id
             ).execute()
             
-            # Clean up cache
             self.cache.delete_event(event_id)
             return result
         except Exception as e:
@@ -552,8 +637,8 @@ class CalendarManager:
                 end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
             end_date = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=timezone.utc)
             
-            time_min = start_date.isoformat().replace('+00:00', 'Z')
-            time_max = end_date.isoformat().replace('+00:00', 'Z')
+            time_min = format_iso_for_api(start_date)
+            time_max = format_iso_for_api(end_date)
             
             holidays_result = self.service.events().list(
                 calendarId=holiday_calendar_id,
@@ -569,68 +654,87 @@ class CalendarManager:
                     event_date = datetime.fromisoformat(item['start']['date']).date()
                     holidays[event_date] = item['summary']
                     
-            # Update cache
             self.cache.add_holidays(year, month, holidays)
             return holidays
             
         except Exception as e:
             print(f"Error fetching holidays: {str(e)}")
-            return {}
+            return {} 
 
-# TASK AND REMINDER CLASSES
-class Task:
-    """Represents a task/event with start and end times."""
-    def __init__(self, summary, start_dt, end_dt, task_id=None, reminder_minutes=10, status='Pending'):
-        self.summary = summary
-        self.start_dt = start_dt
-        self.end_dt = end_dt
-        self.task_id = task_id
-        self.reminder_minutes = reminder_minutes
-        self.status = status
+# API WORKER THREAD
+class APIWorker(QThread):
+    """Worker thread for handling API calls without blocking the UI."""
+    taskCompleted = pyqtSignal(object, object)
+    taskError = pyqtSignal(Exception, object)
+    loadingChanged = pyqtSignal(bool)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.queue = queue.Queue()
+        self.running = True
+        
+    def add_task(self, task_type, func, **kwargs):
+        """Add a task to the queue."""
+        self.queue.put((task_type, func, kwargs))
+            
+        if not self.isRunning():
+            self.start()
+    
+    def run(self):
+        """Main worker loop that processes queued tasks."""
+        while self.running:
+            try:
+                try:
+                    task_type, func, kwargs = self.queue.get(block=True, timeout=0.5)
+                except queue.Empty:
+                    continue
+                
+                try:
+                    if task_type not in ['background_fetch', 'preload']:
+                        self.loadingChanged.emit(True)
+                    
+                    result = func(**kwargs)
+                    
+                    self.taskCompleted.emit(result, task_type)
+                    
+                except Exception as e:
+                    print(f"Error in worker thread ({task_type}): {str(e)}")
+                    self.taskError.emit(e, task_type)
+                
+                finally:
+                    if task_type not in ['background_fetch', 'preload']:
+                        self.loadingChanged.emit(False)
+                    self.queue.task_done()
+                    
+            except Exception as e:
+                print(f"Unexpected error in worker thread: {str(e)}")
+                
+        print("Worker thread stopped")
+                
+    def stop(self):
+        """Stop the worker thread."""
+        self.running = False
+        self.wait(1000)
 
-class ReminderManager:
-    """Manages task reminders and notifications."""
-    def __init__(self, root):
-        self.root = root
-        self.reminders = []
-
-    def add_reminder(self, task):
-        """Add a task to the reminder list."""
-        self.reminders.append(task)
-
-    def check_reminders(self):
-        """Check if any reminders need to be shown and schedule next check."""
-        now = datetime.now(timezone.utc)
-        for task in self.reminders:
-            if task.status == 'Pending' and (task.start_dt - now) <= timedelta(minutes=task.reminder_minutes) and (task.start_dt - now) > timedelta(0):
-                time_str = format_task_time(task.start_dt, task.end_dt)
-                self.root.show_alert(f"Reminder: {task.summary} at {time_str}", alert_type="info", duration=5000)
-        self.root.after(60000, self.check_reminders)
-
-# DIALOG UI CLASSES
-class TaskDialog(ctk.CTkToplevel):
+class TaskDialog(QDialog):
     """Dialog for creating and editing tasks."""
-    def __init__(self, master, on_confirm, task=None):
-        super().__init__(master)
+    def __init__(self, parent=None, on_confirm=None, task=None):
+        super().__init__(parent)
         self.on_confirm = on_confirm
         self.task = task
-        self.title("Task Dialog")
-        self.configure(fg_color=DROPDOWN_BG_COLOR)
         
-        if master:
-            parent_x = master.winfo_rootx()
-            parent_y = master.winfo_rooty()
-            parent_width = master.winfo_width()
-            parent_height = master.winfo_height()
-            
-            x_pos = parent_x + (parent_width - DEFAULT_DIALOG_WIDTH) // 2
-            y_pos = parent_y + (parent_height - DEFAULT_DIALOG_HEIGHT) // 2
-            
-            self.geometry(f"{DEFAULT_DIALOG_WIDTH}x{DEFAULT_DIALOG_HEIGHT}+{x_pos}+{y_pos}")
-            
+        self.setWindowTitle("Task Dialog")
+        self.setFixedSize(DEFAULT_DIALOG_WIDTH, DEFAULT_DIALOG_HEIGHT)
+        
+        if parent:
+            parent_rect = parent.geometry()
+            x = parent_rect.x() + (parent_rect.width() - DEFAULT_DIALOG_WIDTH) // 2
+            y = parent_rect.y() + (parent_rect.height() - DEFAULT_DIALOG_HEIGHT) // 2
+            self.setGeometry(x, y, DEFAULT_DIALOG_WIDTH, DEFAULT_DIALOG_HEIGHT)
+        
         self.setup_initial_time()
         
-        self.after(10, self.build_widgets)
+        self.init_ui()
         
     def setup_initial_time(self):
         """Set up initial time values."""
@@ -644,6 +748,8 @@ class TaskDialog(ctk.CTkToplevel):
             
             self.initial_hour, self.initial_period = convert_from_24(str(local_start.hour))
             self.initial_min = local_start.minute
+            
+            self.initial_date = local_start.date()
         else:
             now = datetime.now()
             next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -651,93 +757,155 @@ class TaskDialog(ctk.CTkToplevel):
             self.initial_hour = hour_12
             self.initial_min = 0
             self.initial_period = period
-
-    def build_widgets(self):
+            
+            self.initial_date = now.date()
+            
+    def init_ui(self):
         """Create and arrange all dialog widgets."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(10)
+        
         header_text = "Edit Task" if self.task else "Add New Task"
-        header = ctk.CTkLabel(self, text=header_text, font=FONT_HEADER, text_color=TEXT_COLOR)
-        header.pack(pady=PADDING)
-
-        summary_label = ctk.CTkLabel(self, text="Task Summary:", font=FONT_LABEL, text_color=TEXT_COLOR)
-        summary_label.pack(pady=(5, 0))
-        self.summary_entry = ctk.CTkEntry(self, font=FONT_LABEL)
+        header_label = QLabel(header_text)
+        header_font = QFont(FONT_HEADER, FONT_HEADER_SIZE)
+        header_font.setBold(True)
+        header_label.setFont(header_font)
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(header_label)
+        
+        summary_label = QLabel("Task Summary:")
+        summary_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+        main_layout.addWidget(summary_label)
+        
+        self.summary_edit = QLineEdit()
+        self.summary_edit.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
         if self.task:
-            self.summary_entry.insert(0, self.task.summary)
-        self.summary_entry.pack(pady=5, padx=20, fill="x")
-
-        self.calendar = Calendar(self, date_pattern="y-mm-dd")
-        self.calendar.pack(pady=5)
-
-        time_frame = ctk.CTkFrame(self, fg_color=DROPDOWN_BG_COLOR)
-        time_frame.pack(pady=5)
-
-        # Start time row
-        start_label = ctk.CTkLabel(time_frame, text="Start Time (HH:MM):", font=FONT_LABEL, text_color=TEXT_COLOR)
-        start_label.grid(row=0, column=0, padx=5, pady=5)
-        self.start_hour = Spinbox(time_frame, from_=1, to=12, width=4, format="%02.0f", command=self._update_end_time)
-        self.start_hour.grid(row=0, column=1, padx=5, pady=5)
-        self.start_min = Spinbox(time_frame, from_=0, to=59, width=4, format="%02.0f", command=self._update_end_time)
-        self.start_min.grid(row=0, column=2, padx=5, pady=5)
-        self.start_period = ctk.CTkOptionMenu(time_frame, values=["AM", "PM"], width=60)
-        self.start_period.set(self.initial_period)
-        self.start_period.grid(row=0, column=3, padx=5, pady=5)
-
-        # End time row
-        end_label = ctk.CTkLabel(time_frame, text="End Time (HH:MM):", font=FONT_LABEL, text_color=TEXT_COLOR)
-        end_label.grid(row=1, column=0, padx=5, pady=5)
-        self.end_hour = Spinbox(time_frame, from_=1, to=12, width=4, format="%02.0f")
-        self.end_hour.grid(row=1, column=1, padx=5, pady=5)
-        self.end_min = Spinbox(time_frame, from_=0, to=59, width=4, format="%02.0f")
-        self.end_min.grid(row=1, column=2, padx=5, pady=5)
-        self.end_period = ctk.CTkOptionMenu(time_frame, values=["AM", "PM"], width=60)
-        self.end_period.set(self.initial_period)
-        self.end_period.grid(row=1, column=3, padx=5, pady=5)
-
-        # Bind events for end time auto-update
-        self.start_hour.bind("<KeyRelease>", self._update_end_time)
-        self.start_min.bind("<KeyRelease>", self._update_end_time)
-        self.start_period.configure(command=self._update_end_time)
-
-        # Initialize time values
-        if self.task:
-            self._init_time_fields()
-        else:
-            self.start_hour.delete(0, "end")
-            self.start_hour.insert(0, f"{self.initial_hour:02d}")
-            self.start_min.delete(0, "end")
-            self.start_min.insert(0, f"{self.initial_min:02d}")
-            self._update_end_time()
-
-        # Buttons
-        btn_frame = ctk.CTkFrame(self, fg_color=DROPDOWN_BG_COLOR)
-        btn_frame.pack(pady=PADDING)
+            self.summary_edit.setText(self.task.summary)
+        main_layout.addWidget(self.summary_edit)
+        
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        if hasattr(self, 'initial_date'):
+            self.calendar.setSelectedDate(QDate(
+                self.initial_date.year,
+                self.initial_date.month,
+                self.initial_date.day
+            ))
+        main_layout.addWidget(self.calendar)
+        
+        time_frame = QFrame()
+        time_layout = QGridLayout(time_frame)
+        time_layout.setSpacing(5)
+        
+        start_label = QLabel("Start Time:")
+        start_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+        time_layout.addWidget(start_label, 0, 0)
+        
+        start_time_layout = QHBoxLayout()
+        
+        self.start_hour = QSpinBox()
+        self.start_hour.setRange(1, 12)
+        self.start_hour.setValue(self.initial_hour)
+        self.start_hour.setFixedWidth(60)
+        self.start_hour.valueChanged.connect(self.update_end_time)
+        start_time_layout.addWidget(self.start_hour)
+        
+        time_layout.addWidget(QLabel(":"), 0, 1)
+        
+        self.start_min = QSpinBox()
+        self.start_min.setRange(0, 59)
+        self.start_min.setValue(self.initial_min)
+        self.start_min.setFixedWidth(60)
+        self.start_min.setSingleStep(5)
+        self.start_min.valueChanged.connect(self.update_end_time)
+        start_time_layout.addWidget(self.start_min)
+        
+        self.start_period = QComboBox()
+        self.start_period.addItems(["AM", "PM"])
+        self.start_period.setCurrentText(self.initial_period)
+        self.start_period.currentTextChanged.connect(self.update_end_time)
+        start_time_layout.addWidget(self.start_period)
+        
+        time_layout.addLayout(start_time_layout, 0, 2)
+        
+        end_label = QLabel("End Time:")
+        end_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+        time_layout.addWidget(end_label, 1, 0)
+        
+        end_time_layout = QHBoxLayout()
+        
+        self.end_hour = QSpinBox()
+        self.end_hour.setRange(1, 12)
+        self.end_hour.setFixedWidth(60)
+        end_time_layout.addWidget(self.end_hour)
+        
+        time_layout.addWidget(QLabel(":"), 1, 1)
+        
+        self.end_min = QSpinBox()
+        self.end_min.setRange(0, 59)
+        self.end_min.setFixedWidth(60)
+        self.end_min.setSingleStep(5)
+        end_time_layout.addWidget(self.end_min)
+        
+        self.end_period = QComboBox()
+        self.end_period.addItems(["AM", "PM"])
+        end_time_layout.addWidget(self.end_period)
+        
+        time_layout.addLayout(end_time_layout, 1, 2)
+        
+        main_layout.addWidget(time_frame)
+        
+        button_layout = QHBoxLayout()
         
         if self.task and self.task.task_id:
-            delete_btn = ctk.CTkButton(btn_frame, text="Delete", font=FONT_LABEL, 
-                                      fg_color="#AA3333", hover_color="#CC5555",
-                                      command=self.delete_task)
-            delete_btn.grid(row=0, column=0, padx=10)
-            confirm_btn = ctk.CTkButton(btn_frame, text="Save", font=FONT_LABEL, command=self.confirm)
-            confirm_btn.grid(row=0, column=1, padx=10)
-
-        else:
-            confirm_btn = ctk.CTkButton(btn_frame, text="Create", font=FONT_LABEL, command=self.confirm)
-            confirm_btn.grid(row=0, column=0, padx=10)
-
+            delete_btn = QPushButton("Delete")
+            delete_btn.setStyleSheet("background-color: #AA3333; color: white;")
+            delete_btn.clicked.connect(self.delete_task)
+            button_layout.addWidget(delete_btn)
             
-    def delete_task(self):
-        """Delete the current task."""
-        if self.task and self.task.task_id:
-            if hasattr(self.master, 'delete_task'):
-                self.master.delete_task(self.task)
-            self.destroy()
-
-    def _update_end_time(self, event=None):
+            confirm_btn = QPushButton("Save")
+            confirm_btn.clicked.connect(self.confirm)
+            button_layout.addWidget(confirm_btn)
+        else:
+            confirm_btn = QPushButton("Create")
+            confirm_btn.clicked.connect(self.confirm)
+            button_layout.addWidget(confirm_btn)
+        
+        main_layout.addLayout(button_layout)
+        
+        if self.task:
+            self.init_time_fields()
+        else:
+            self.update_end_time()
+            
+    def init_time_fields(self):
+        """Initialize time fields when editing an existing task."""
+        local_start = self.task.start_dt.astimezone()
+        local_end = self.task.end_dt.astimezone()
+        
+        self.calendar.setSelectedDate(QDate(
+            local_start.year,
+            local_start.month, 
+            local_start.day
+        ))
+        
+        start_hour, start_period = convert_from_24(str(local_start.hour))
+        self.start_hour.setValue(start_hour)
+        self.start_min.setValue(local_start.minute)
+        self.start_period.setCurrentText(start_period)
+        
+        end_hour, end_period = convert_from_24(str(local_end.hour))
+        self.end_hour.setValue(end_hour)
+        self.end_min.setValue(local_end.minute)
+        self.end_period.setCurrentText(end_period)
+            
+    def update_end_time(self):
         """Update end time to be 1 hour after start time."""
         try:
-            start_hour = int(self.start_hour.get())
-            start_min = int(self.start_min.get())
-            start_period = self.start_period.get()
+            start_hour = self.start_hour.value()
+            start_min = self.start_min.value()
+            start_period = self.start_period.currentText()
             
             start_hour_24 = convert_to_24(str(start_hour), start_period)
             
@@ -745,63 +913,57 @@ class TaskDialog(ctk.CTkToplevel):
             
             end_hour_12, end_period = convert_from_24(str(end_hour_24))
             
-            self.end_hour.delete(0, "end")
-            self.end_hour.insert(0, f"{end_hour_12:02d}")
-            self.end_min.delete(0, "end")
-            self.end_min.insert(0, f"{start_min:02d}")
-            self.end_period.set(end_period)
-        except (ValueError, TypeError):
-            pass
-
-    def _init_time_fields(self):
-        """Initialize time fields when editing an existing task."""
-        local_start = self.task.start_dt.astimezone()
-        local_end = self.task.end_dt.astimezone()
-        
-        self.calendar.selection_set(local_start.date())
-        
-        start_hour, start_period = convert_from_24(str(local_start.hour))
-        self.start_hour.delete(0, "end")
-        self.start_hour.insert(0, f"{start_hour:02d}")
-        self.start_min.delete(0, "end")
-        self.start_min.insert(0, f"{local_start.minute:02d}")
-        self.start_period.set(start_period)
-        
-        end_hour, end_period = convert_from_24(str(local_end.hour))
-        self.end_hour.delete(0, "end")
-        self.end_hour.insert(0, f"{end_hour:02d}")
-        self.end_min.delete(0, "end")
-        self.end_min.insert(0, f"{local_end.minute:02d}")
-        self.end_period.set(end_period)
-
+            self.end_hour.setValue(end_hour_12)
+            self.end_min.setValue(start_min)
+            self.end_period.setCurrentText(end_period)
+        except (ValueError, TypeError) as e:
+            print(f"Error updating end time: {str(e)}")
+            
+    def delete_task(self):
+        """Delete the current task."""
+        if self.task and self.task.task_id:
+            parent = self.parent()
+            if parent and hasattr(parent, 'delete_task'):
+                parent.delete_task(self.task)
+            self.accept()
+            
     def confirm(self):
         """Validate input and create/update task."""
-        summary = self.summary_entry.get().strip()
+        summary = self.summary_edit.text().strip()
         if not summary:
-            self.master.show_alert("Task summary cannot be empty.", alert_type="error", duration=DEFAULT_ERROR_DURATION)
+            QMessageBox.warning(self, "Warning", "Task summary cannot be empty.")
             return
-
-        date_str = self.calendar.get_date()
+            
+        selected_date = self.calendar.selectedDate()
+        date_str = f"{selected_date.year()}-{selected_date.month():02d}-{selected_date.day():02d}"
+        
         try:
-            start_hour_24 = convert_to_24(self.start_hour.get(), self.start_period.get())
-            end_hour_24 = convert_to_24(self.end_hour.get(), self.end_period.get())
+            start_hour_24 = convert_to_24(str(self.start_hour.value()), self.start_period.currentText())
+            end_hour_24 = convert_to_24(str(self.end_hour.value()), self.end_period.currentText())
             
             local_tz = datetime.now().astimezone().tzinfo
-            start_dt_local = datetime.strptime(f"{date_str} {start_hour_24:02d}:{self.start_min.get()}", "%Y-%m-%d %H:%M")
+            start_dt_local = datetime.strptime(
+                f"{date_str} {start_hour_24:02d}:{self.start_min.value():02d}", 
+                "%Y-%m-%d %H:%M"
+            )
             start_dt_local = start_dt_local.replace(tzinfo=local_tz)
             start_dt = local_to_utc(start_dt_local)
             
-            end_dt_local = datetime.strptime(f"{date_str} {end_hour_24:02d}:{self.end_min.get()}", "%Y-%m-%d %H:%M")
+            end_dt_local = datetime.strptime(
+                f"{date_str} {end_hour_24:02d}:{self.end_min.value():02d}", 
+                "%Y-%m-%d %H:%M"
+            )
             end_dt_local = end_dt_local.replace(tzinfo=local_tz)
             end_dt = local_to_utc(end_dt_local)
             
             if end_dt <= start_dt:
-                self.master.show_alert("End time must be after start time.", alert_type="error", duration=DEFAULT_ERROR_DURATION)
+                QMessageBox.warning(self, "Warning", "End time must be after start time.")
                 return
+                
         except Exception as e:
-            self.master.show_alert(f"Invalid date or time: {str(e)}", alert_type="error", duration=DEFAULT_ERROR_DURATION)
+            QMessageBox.warning(self, "Error", f"Invalid date or time: {str(e)}")
             return
-
+            
         if self.task:
             self.task.summary = summary
             self.task.start_dt = start_dt
@@ -809,140 +971,138 @@ class TaskDialog(ctk.CTkToplevel):
         else:
             self.task = Task(summary, start_dt, end_dt)
             
-        self.on_confirm(self.task)
-        self.destroy()
+        if self.on_confirm:
+            self.on_confirm(self.task)
+            
+        self.accept() 
 
-# Main Application UI 
-class TodoAppUI(ctk.CTk):
-    """Main application UI class for the To-Do List application."""
+class ReminderManager(QObject):
+    """Manages task reminders and notifications."""
+    reminderReady = pyqtSignal(Task)
     
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.reminders = []
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.check_reminders)
+        self.timer.start(60000)
+        
+    def add_reminder(self, task):
+        """Add a task to the reminder list."""
+        self.reminders.append(task)
+        
+    def check_reminders(self):
+        """Check if any reminders need to be shown."""
+        now = datetime.now(timezone.utc)
+        for task in self.reminders:
+            if task.status == 'Pending' and (task.start_dt - now) <= timedelta(minutes=task.reminder_minutes) and (task.start_dt - now) > timedelta(0):
+                self.reminderReady.emit(task)
+
+class TodoApp(QMainWindow):
+    """Main application window."""
     def __init__(self, calendar_manager):
         super().__init__()
         self.calendar_manager = calendar_manager
         
-        self.title("To-Do List")
-        self.geometry(DEFAULT_WINDOW_SIZE)
-        self.configure(fg_color=BACKGROUND_COLOR)
+        self.setWindowTitle("To-Do List")
+        self.resize(*DEFAULT_WINDOW_SIZE)
+        
+        self.setStyleSheet(MAIN_STYLE)
         
         self.current_view = "daily"
         today = datetime.now().date()
         self.displayed_year, self.displayed_month = today.year, today.month
         
-        self.preload_active = False
-        self.ui_dirty = True
         self.loading = False
+        
+        self.init_ui()
+        
         self.worker = APIWorker(self)
-        self.data_lock = threading.Lock()  # Add lock for thread safety
+        self.worker.taskCompleted.connect(self.on_task_completed)
+        self.worker.taskError.connect(self.on_task_error)
+        self.worker.loadingChanged.connect(self.on_loading_changed)
+        
         self.reminder_manager = ReminderManager(self)
+        self.reminder_manager.reminderReady.connect(self.show_reminder)
         
-        # Initialize view containers
-        self.monthly_view_frame = None
-        self.content_frame = None
-        self.calendar_cells = {}
-        self.rendered_days = set()
-
-        # Set up UI components
-        self._setup_alert_area()
-        self._setup_navbar()
-        self._setup_main_layout()
-        
-        # Start background processes
         self.refresh_events()
-        self.reminder_manager.check_reminders()
-        self.check_token_refresh()
         
-        # Set up window close handler
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+    def init_ui(self):
+        """Initialize the main UI components."""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-    def check_token_refresh(self):
-        """Periodically check if token needs refresh and schedule next check."""
-        try:
-            if hasattr(self.calendar_manager, 'auth_service'):
-                refreshed = self.calendar_manager.auth_service.auto_refresh_token()
-                if refreshed:
-                    self.show_alert("Authentication token refreshed successfully", duration=3000)
-        except Exception as e:
-            print(f"Error checking token refresh: {str(e)}")
-        finally:
-            self.after(600000, self.check_token_refresh)
+        self.init_navbar(main_layout)
         
-    def _on_close(self):
-        """Clean up resources before closing."""
-        if hasattr(self, 'worker'):
-            self.worker.stop()
-        self.destroy()
+        self.init_main_content(main_layout)
         
-    def show_loading(self, is_loading):
-        """Show or hide loading indicator."""
-        self.loading = is_loading
-        if is_loading:
-            self.loading_label.pack(side="right", padx=20, pady=5)
-            self.alert_frame.pack(fill="x")
-        else:
-            self.loading_label.pack_forget()
-            if not self.alert_label.cget("text"):
-                self.alert_frame.pack_forget()
-
-    def _setup_alert_area(self):
-        """Set up the alert/notification area."""
-        self.alert_frame = ctk.CTkFrame(self, fg_color=BACKGROUND_COLOR, height=30)
-        self.alert_frame.pack(fill="x")
-        self.alert_label = ctk.CTkLabel(self.alert_frame, text="", font=FONT_LABEL, text_color=TEXT_COLOR)
-        self.alert_label.pack(side="left", padx=20, pady=5)
+    def init_navbar(self, parent_layout):
+        """Initialize the navigation bar."""
+        navbar = QFrame()
+        navbar.setStyleSheet(f"background-color: {NAV_BG_COLOR};")
+        navbar.setMinimumHeight(60)
         
-        # Create loading label once during initialization
-        self.loading_label = ctk.CTkLabel(
-            self.alert_frame, 
-            text="Loading...", 
-            font=FONT_LABEL, 
-            text_color="#55AAFF"
-        )
-        self.loading_label.pack(side="right", padx=20, pady=5)
-        self.loading_label.pack_forget()  # Initially hidden
+        nav_layout = QHBoxLayout(navbar)
+        nav_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
         
-        self.alert_frame.pack_forget()
-
-    def _check_scroll_position(self):
-        """Periodic check for UI maintenance."""
-        self.after(200, self._check_scroll_position)
-    
-    def _render_pending_tasks(self, visible_top=None, visible_bottom=None, canvas_height=None):
-        """Helper function to render all days in expanded month containers that haven't been rendered yet."""
-        if not hasattr(self, 'month_containers') or not self.month_containers:
-            return
-            
-        for month_key, month_data in self.month_containers.items():
-            if not month_data.get('expanded', False):
-                continue
-                
-            for day_key, day_data in month_data.get('days', {}).items():
-                with self.data_lock:
-                    already_rendered = day_key in self.rendered_days
-                if not already_rendered and not day_data.get('rendered', False):
-                    self._render_day(month_key, day_key, day_data)
-    
-    def _render_day(self, month_key, day_key, day_data):
-        """Render a day's content."""
-        if not day_data.get('frame') or not day_data.get('tasks'):
-            return
-            
-        parent_frame = day_data.get('frame')
-        tasks = day_data.get('tasks', [])
+        title_label = QLabel("CS 220 To-Do List")
+        title_label.setFont(QFont(FONT_HEADER, FONT_HEADER_SIZE, QFont.Weight.Bold))
+        nav_layout.addWidget(title_label)
         
-        day_data['rendered'] = True
-        with self.data_lock:
-            self.rendered_days.add(day_key)
+        search_frame = QFrame()
+        search_layout = QHBoxLayout(search_frame)
+        search_layout.setContentsMargins(0, 0, 0, 0)
         
-        tasks_container = day_data.get('container')
-        if tasks_container:
-            for task in tasks:
-                self._add_task_to_container(tasks_container, task)
-
-    def refresh_events(self):
-        """Refresh events from Google Calendar using background thread."""
-        self.ui_dirty = True
+        self.search_entry = QLineEdit()
+        self.search_entry.setPlaceholderText("Search tasks...")
+        self.search_entry.textChanged.connect(self.filter_content)
+        search_layout.addWidget(self.search_entry)
         
-        def on_events_loaded(result):
+        nav_layout.addWidget(search_frame, 1)
+        
+        today_button = QPushButton("Today")
+        today_button.clicked.connect(self.scroll_to_today)
+        nav_layout.addWidget(today_button)
+        
+        view_selector = QComboBox()
+        view_selector.addItems(["Daily View", "Monthly View"])
+        view_selector.currentTextChanged.connect(self.switch_view)
+        nav_layout.addWidget(view_selector)
+        
+        add_button = QPushButton("Add Task")
+        add_button.clicked.connect(lambda: self.open_task_dialog())
+        nav_layout.addWidget(add_button)
+        
+        parent_layout.addWidget(navbar)
+        
+    def init_main_content(self, parent_layout):
+        """Initialize the main content area with stacked views."""
+        self.views_stack = QStackedWidget()
+        
+        self.daily_view = QScrollArea()
+        self.daily_view.setWidgetResizable(True)
+        self.daily_content = QWidget()
+        self.daily_layout = QVBoxLayout(self.daily_content)
+        self.daily_layout.setSpacing(PADDING//2)
+        self.daily_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
+        self.daily_view.setWidget(self.daily_content)
+        
+        self.monthly_view = QWidget()
+        self.monthly_layout = QVBoxLayout(self.monthly_view)
+        self.monthly_layout.setSpacing(0)
+        self.monthly_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.views_stack.addWidget(self.daily_view)
+        self.views_stack.addWidget(self.monthly_view)
+        
+        parent_layout.addWidget(self.views_stack, 1)
+        
+    def on_task_completed(self, result, task_type):
+        """Handle completed tasks from worker thread."""
+        if task_type == "fetch_events":
             events, next_token = result
             if events:
                 self._process_loaded_events(events)
@@ -951,440 +1111,123 @@ class TodoAppUI(ctk.CTk):
                 self._fetch_next_page(next_token)
             else:
                 self._update_current_view()
-        
-        def on_error(error):
-            self.show_alert(f"Error loading events: {str(error)}", alert_type="error", duration=5000)
+                
+        elif task_type == "background_fetch":
+            events, next_token = result
+            if events:
+                self._process_loaded_events(events)
+            
+            if next_token:
+                self._fetch_next_page(next_token)
+            else:
+                self._update_current_view()
+                
+        elif task_type == "fetch_month":
+            if self.current_view == "monthly":
+                search_term = self.search_entry.text() if hasattr(self, 'search_entry') else ""
+                tasks_by_date = self.calendar_manager.cache.get_tasks_for_month(self.displayed_year, self.displayed_month)
+                
+                self._update_calendar_cells(tasks_by_date, search_term)
+            else:
+                self._update_current_view()
+            
+        elif task_type == "fetch_holidays":
+            self._update_holidays(result)
+            
+        elif task_type == "create_task" or task_type == "update_task":
+            action = "created" if task_type == "create_task" else "updated"
+            self.show_alert(f"Task {action}: {result['summary']}", duration=3000)
+            
+            self._update_current_view()
+            
+        elif task_type == "delete_task":
+            self.show_alert(f"Task deleted", duration=3000)
+            
             self._update_current_view()
         
-        # Use beginning of current month instead of just current date
+    def on_task_error(self, error, task_type):
+        """Handle errors from worker thread."""
+        if task_type == "fetch_events":
+            self.show_alert(f"Error fetching events: {str(error)}", duration=4000)
+            self._update_current_view()
+            
+        elif task_type in ["create_task", "update_task"]:
+            action = "create" if task_type == "create_task" else "update"
+            self.show_alert(f"Failed to {action} task: {str(error)}", duration=4000)
+            
+        elif task_type == "delete_task":
+            self.show_alert(f"Failed to delete task: {str(error)}", duration=4000)
+            
+        else:
+            self.show_alert(f"Error in {task_type}: {str(error)}", duration=4000)
+            
+    def on_loading_changed(self, is_loading):
+        """Handle loading state changes."""
+        self.loading = is_loading
+        if is_loading:
+            print("Loading started")
+        else:
+            print("Loading finished")
+            
+    def show_alert(self, message, duration=3000):
+        """Log alerts to console."""
+        print(f"INFO: {message}")
+        
+    def show_reminder(self, task):
+        """Show a reminder notification for a task."""
+        time_str = format_task_time(task.start_dt, task.end_dt)
+        self.show_alert(f"Reminder: {task.summary} at {time_str}", duration=5000)
+        
+    def refresh_events(self):
+        """Refresh events from Google Calendar."""
         now = datetime.now()
         start_date = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         
         self.worker.add_task(
             "fetch_events",
             self.calendar_manager.fetch_events,
-            callback=on_events_loaded,
-            error_callback=on_error,
             calendar_id='primary',
             max_results=50,
             start_date=start_date
         )
-    
+
     def _fetch_next_page(self, page_token):
-        """Fetch the next page of events in the background."""
-        def on_next_page_loaded(result):
-            events, next_token = result
-            if events:
-                self._process_loaded_events(events)
-            
-            if next_token:
-                self._fetch_next_page(next_token)
-            else:
-                self._update_current_view()
-        
-        def on_error(error):
-            print(f"Error loading next page: {str(error)}")
-            # Update UI with what we have so far
-            self._update_current_view()
-        
-        # Queue the API call in the worker thread
+        """Fetch the next page of events."""
         self.worker.add_task(
             "background_fetch",
             self.calendar_manager.fetch_events,
-            callback=on_next_page_loaded,
-            error_callback=on_error,
             calendar_id='primary',
             max_results=50,
             page_token=page_token
         )
-    
+        
     def _update_current_view(self):
         """Update the current view after data has been loaded."""
         if self.current_view == "daily":
-            self.build_daily_view(self.search_entry.get() if hasattr(self, 'search_entry') else "")
+            self.build_daily_view(self.search_entry.text() if hasattr(self, 'search_entry') else "")
         elif self.current_view == "monthly":
-            self._update_monthly_view_data(self.search_entry.get() if hasattr(self, 'search_entry') else "")
-        self.ui_dirty = False
-    
+            self._update_monthly_view_data(self.search_entry.text() if hasattr(self, 'search_entry') else "")
+        
     def _process_loaded_events(self, events):
         """Process loaded events and update the cache."""
-        # Add events to cache
         added_count = 0
         
         for event in events:
             event_id = event.get('id')
             
-            # Check if event already exists using our dedicated set
             if event_id and self.calendar_manager.cache.has_event_id(event_id):
-                continue  # Skip duplicates
+                continue
                 
-            # Add to cache which handles converting to task
             self.calendar_manager.cache.add_event(event)
             added_count += 1
             
-            # Add to reminders
             task = self.calendar_manager.cache._convert_event_to_task(event)
             if task:
                 self.reminder_manager.add_reminder(task)
         
-        # Only update UI if we've added events and UI needs updating
-        if added_count > 0 and self.ui_dirty:
+        if added_count > 0:
             self._update_current_view()
-
-    def build_daily_view(self, search_term=""):
-        """Build the daily view with all tasks rendered for expanded months."""
-        # Clear tracking variables
-        self.rendered_days = set()
-        self.month_containers = {}
-        
-        # Clear the current content
-        for widget in self.content_frame.winfo_children():
-            widget.destroy()
-        
-        # Get filtered tasks by date
-        tasks_by_date = self.get_filtered_tasks_by_date(search_term)
-        
-        # Sort dates for chronological display
-        sorted_dates = sorted(tasks_by_date.keys())
-        
-        if not sorted_dates:
-            # Show a message if no tasks found
-            no_tasks_label = ctk.CTkLabel(
-                self.content_frame, 
-                text="No tasks found for this period", 
-                font=FONT_HEADER, 
-                text_color=TEXT_COLOR
-            )
-            no_tasks_label.pack(pady=50)
-            return
-        
-        # Get current date to determine which months to expand by default
-        current_date = datetime.now().date()
-        
-        # Group tasks by month for counting
-        tasks_by_month = {}
-        for day, tasks in tasks_by_date.items():
-            month_key = (day.year, day.month)
-            if month_key not in tasks_by_month:
-                tasks_by_month[month_key] = []
-            tasks_by_month[month_key].extend(tasks)
-        
-        # Track current month and year to detect changes
-        current_month = None
-        current_year = None
-        current_month_frame = None
-        
-        # Loop through each day in sorted order
-        for day in sorted_dates:
-            # Check if month or year has changed
-            if current_year != day.year or current_month != day.month:
-                # Get task count for this month
-                month_key = (day.year, day.month)
-                task_count = len(tasks_by_month.get(month_key, []))
-                
-                # Create month/year separator
-                separator_frame = ctk.CTkFrame(self.content_frame, fg_color="#262640")
-                separator_frame.pack(fill="x", padx=PADDING, pady=(PADDING, PADDING/2))
-                
-                # Create internal layout for the separator
-                header_container = ctk.CTkFrame(separator_frame, fg_color="#262640")
-                header_container.pack(fill="x", padx=0, pady=0)
-                
-                # Determine if this month should be expanded by default (current month)
-                is_current_month = (day.year == current_date.year and day.month == current_date.month)
-                
-                # Month and year header with icon, toggle indicator, and task count
-                icon = "🔽" if is_current_month else "▶️"
-                month_year_text = f"{calendar.month_name[day.month]} {day.year}"
-                task_count_text = f"({task_count} task{'s' if task_count != 1 else ''})"
-                
-                header_frame = ctk.CTkFrame(header_container, fg_color="#262640")
-                header_frame.pack(fill="x", expand=True)
-                header_frame.grid_columnconfigure(0, weight=1)  # Month name takes available space
-                header_frame.grid_columnconfigure(1, weight=0)  # Task count is compact
-                
-                # Month name and icon
-                month_year_label = ctk.CTkLabel(
-                    header_frame, 
-                    text=f"📅  {month_year_text} {icon}", 
-                    font=FONT_HEADER, 
-                    text_color="#FFFFFF",
-                    anchor="w"
-                )
-                month_year_label.grid(row=0, column=0, sticky="w", padx=PADDING, pady=PADDING/3)
-                
-                # Task count
-                task_count_label = ctk.CTkLabel(
-                    header_frame,
-                    text=task_count_text,
-                    font=FONT_LABEL,
-                    text_color="#AAAAFF",
-                    anchor="e"
-                )
-                task_count_label.grid(row=0, column=1, sticky="e", padx=PADDING, pady=PADDING/3)
-                
-                # Add horizontal divider line
-                divider = ctk.CTkFrame(separator_frame, height=2, fg_color="#3A3A5C")
-                divider.pack(fill="x", padx=PADDING, pady=(0, PADDING/4))
-                
-                # Create a container for all days in this month
-                month_container = ctk.CTkFrame(self.content_frame, fg_color=BACKGROUND_COLOR)
-                month_container.pack(fill="x", padx=0, pady=0)
-                
-                # Track days in this month container
-                month_days = {}
-                self.month_containers[month_key] = {
-                    'frame': month_container,
-                    'days': month_days,
-                    'expanded': is_current_month
-                }
-                
-                # Hide the container if it's not the current month and we're not searching
-                if not is_current_month and not search_term:
-                    month_container.pack_forget()
-                
-                # Store references for toggling
-                separator_frame.month_container = month_container
-                separator_frame.month_year_label = month_year_label
-                separator_frame.is_expanded = is_current_month
-                separator_frame.month_year_text = month_year_text
-                separator_frame.task_count_text = task_count_text
-                separator_frame.month_key = month_key
-                
-                # Bind click event to toggle - only bind to the top-level container
-                separator_frame.bind("<Button-1>", self._toggle_month_section)
-                
-                # Update tracking variables
-                current_month = day.month
-                current_year = day.year
-                current_month_frame = month_container
             
-            # Create the day frame for tasks inside the month container
-            day_frame = ctk.CTkFrame(current_month_frame, fg_color=BACKGROUND_COLOR)
-            day_frame.pack(fill="x", padx=PADDING, pady=PADDING/3)
-            
-            # Create the date strip on the left
-            self._create_day_header(day_frame, day)
-            
-            # Create the tasks container for the day
-            tasks_container = ctk.CTkFrame(day_frame, fg_color=BACKGROUND_COLOR)
-            tasks_container.pack(side="left", fill="x", expand=True)
-            
-            # Store day data for rendering
-            month_key = (day.year, day.month)
-            day_key = str(day)
-            
-            self.month_containers[month_key]['days'][day_key] = {
-                'frame': day_frame,
-                'container': tasks_container,
-                'tasks': tasks_by_date[day],
-                'rendered': False
-            }
-            
-            # Render tasks for visible/expanded months or when searching
-            is_current_month = (day.year == current_date.year and day.month == current_date.month)
-            if is_current_month or search_term:
-                self._render_day(month_key, day_key, self.month_containers[month_key]['days'][day_key])
-    
-    def _toggle_month_section(self, event, separator_frame=None):
-        """Toggle the visibility of a month section."""
-        # If called from event, extract the separator_frame
-        if separator_frame is None:
-            separator_frame = event.widget
-            while not hasattr(separator_frame, "month_container"):
-                separator_frame = separator_frame.master
-                if separator_frame is None:
-                    return  # Not found
-            
-        # Toggle the expanded state
-        separator_frame.is_expanded = not separator_frame.is_expanded
-        
-        # Update the icon
-        icon = "🔽" if separator_frame.is_expanded else "▶️"
-        separator_frame.month_year_label.configure(
-            text=f"📅  {separator_frame.month_year_text} {icon}"
-        )
-        
-        # Show or hide the month container
-        if separator_frame.is_expanded:
-            separator_frame.month_container.pack(fill="x", padx=0, pady=0, after=separator_frame)
-            
-            # Render all days that aren't already rendered
-            if hasattr(separator_frame, 'month_key') and separator_frame.month_key in self.month_containers:
-                month_data = self.month_containers[separator_frame.month_key]
-                for day_key, day_data in month_data.get('days', {}).items():
-                    if not day_data.get('rendered', False):
-                        self._render_day(separator_frame.month_key, day_key, day_data)
-                        
-            # Update expanded state in tracking dict
-            if hasattr(separator_frame, 'month_key') and separator_frame.month_key in self.month_containers:
-                self.month_containers[separator_frame.month_key]['expanded'] = True
-        else:
-            separator_frame.month_container.pack_forget()
-            # Update expanded state in tracking dict
-            if hasattr(separator_frame, 'month_key') and separator_frame.month_key in self.month_containers:
-                self.month_containers[separator_frame.month_key]['expanded'] = False
-
-    def _render_task(self, parent_frame, task, is_monthly_view=False, truncate_length=None):
-        """Shared method to render a task UI element consistently across views."""
-        # Create task card with appropriate styling
-        corner_radius = 3 if is_monthly_view else 6
-        task_frame = ctk.CTkFrame(parent_frame, fg_color=CARD_COLOR, corner_radius=corner_radius)
-        
-        # Format time using the shared helper function
-        time_str = format_task_time(task.start_dt, task.end_dt)
-
-        # Handle summary truncation for monthly view
-        summary = task.summary
-        if truncate_length and len(summary) > truncate_length:
-            display_summary = f"{summary[:truncate_length]}..."
-        else:
-            display_summary = summary
-
-        # Set common parameters based on view type
-        font = FONT_SMALL if is_monthly_view else FONT_LABEL
-        anchor = "w" if is_monthly_view else "center"
-        padding = (2, 1 if is_monthly_view else 0) if is_monthly_view else (4, 3)
-
-        # Create task summary label
-        task_label = ctk.CTkLabel(task_frame, text=f"{'• ' if is_monthly_view else ''}{display_summary}", 
-                           font=font, text_color="#FFFFFF", anchor=anchor)
-        task_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(padding[1], 0))
-        
-        # Create time label
-        time_label = ctk.CTkLabel(task_frame, text=time_str, font=FONT_SMALL, 
-                           text_color="#FFFFFF", anchor=anchor)
-        time_label.pack(anchor="w" if is_monthly_view else None, fill="x", padx=padding[0], pady=(0, padding[1]))
-        
-        # Bind click event only to the top-level container
-        task_frame.bind("<Button-1>", lambda e, t=task: self.open_task_dialog(t))
-        
-        return task_frame
-
-    def _add_task_to_container(self, container, task):
-        """Add a single task to a container."""
-        # Use the shared render method
-        task_frame = self._render_task(container, task)
-        task_frame.pack(fill="x", pady=PADDING/3)
-
-    def _add_tasks_to_cell(self, parent_frame, tasks, max_tasks=MAX_TASKS_PER_CELL):
-        """Helper to add tasks to a cell - separated for better readability."""
-        # Clear all existing widgets first
-        for widget in parent_frame.winfo_children():
-            widget.destroy()
-            
-        # Add tasks up to the limit
-        for i, task in enumerate(tasks[:max_tasks]):
-            task_frame = self._render_task(parent_frame, task, is_monthly_view=True, truncate_length=14)
-            task_frame.pack(fill="x", padx=1, pady=1)
-        
-        # Show "more" indicator if needed
-        if len(tasks) > max_tasks:
-            more_label = ctk.CTkLabel(parent_frame, text=f"+ {len(tasks) - max_tasks} more", 
-                                   font=FONT_SMALL, text_color="#CCCCFF", anchor="w")
-            more_label.pack(anchor="w", fill="x", padx=2, pady=0)
-        
-        return min(len(tasks), max_tasks)
-    
-    def _create_day_header(self, parent_frame, day):
-        """Create the date header for a day in daily view."""
-        date_strip = ctk.CTkFrame(parent_frame, fg_color=BACKGROUND_COLOR, width=50)
-        date_strip.pack(side="left", anchor="n")
-        
-        # Day of week abbreviation
-        abbr_label = ctk.CTkLabel(date_strip, text=day.strftime("%a").upper(), 
-                               font=FONT_DAY, text_color=TEXT_COLOR)
-        abbr_label.pack(anchor="w")
-        
-        # Day number
-        date_label = ctk.CTkLabel(date_strip, text=day.strftime("%d"), 
-                               font=FONT_DATE, text_color=TEXT_COLOR)
-        date_label.pack(anchor="w")
-    
-    def _add_day_tasks(self, container, tasks):
-        """Add tasks for a day to the container in daily view."""
-        for task in tasks:
-            # Use the shared render method
-            task_frame = self._render_task(container, task)
-            task_frame.pack(fill="x", pady=PADDING/3)
-
-    # Task Management
-    def open_task_dialog(self, task=None):
-        """Open dialog to create new task or edit existing task."""
-        def on_confirm(new_task):
-            # Prepare event data
-            event = {
-                'summary': new_task.summary,
-                'start': {'dateTime': new_task.start_dt.isoformat(), 'timeZone': 'UTC'},
-                'end': {'dateTime': new_task.end_dt.isoformat(), 'timeZone': 'UTC'}
-            }
-            
-            # Common success/error handlers
-            def on_success(result):
-                action = "updated" if task and task.task_id else "created"
-                if not task or not task.task_id:
-                    new_task.task_id = result.get('id')
-                self.show_alert(f"Task {action}: {new_task.summary}", duration=3000)
-                self.refresh_events()
-            
-            def on_error(error):
-                action = "update" if task and task.task_id else "add"
-                self.show_alert(f"Failed to {action} task: {str(error)}", alert_type="error", duration=DEFAULT_ERROR_DURATION)
-            
-            # Queue the API operation in the worker thread
-            if task and task.task_id:
-                # Update existing task
-                self.worker.add_task(
-                    "update_task",
-                    self.calendar_manager.update_event,
-                    callback=on_success,
-                    error_callback=on_error,
-                    calendar_id='primary',
-                    event_id=task.task_id,
-                    updated_event=event
-                )
-            else:
-                # Create new task
-                self.worker.add_task(
-                    "create_task",
-                    self.calendar_manager.add_event,
-                    callback=on_success,
-                    error_callback=on_error,
-                    calendar_id='primary',
-                    event=event
-                )
-            
-        dialog = TaskDialog(self, on_confirm, task)
-        dialog.grab_set()
-        
-    def delete_task(self, task):
-        """Delete a task from the calendar."""
-        if not task or not task.task_id:
-            self.show_alert("Cannot delete task: no task ID", alert_type="error", duration=3000)
-            return
-            
-        def on_delete_success(result):
-            self.show_alert(f"Task deleted", duration=3000)
-            
-            # Refresh the current view
-            if self.current_view == "daily":
-                self.build_daily_view()
-            elif self.current_view == "monthly":
-                self._update_monthly_view_data(self.search_entry.get())
-        
-        def on_delete_error(error):
-            self.show_alert(f"Failed to delete task: {str(error)}", alert_type="error", duration=4000)
-        
-        # Queue the deletion in the worker thread
-        self.worker.add_task(
-            "delete_task",
-            self.calendar_manager.delete_event,
-            callback=on_delete_success,
-            error_callback=on_delete_error,
-            calendar_id='primary',
-            event_id=task.task_id
-        )
-
     def get_filtered_tasks_by_date(self, search_term=""):
         """Get tasks filtered by search term, organized by date."""
         tasks_by_date = self._get_tasks_by_date_dict()
@@ -1392,7 +1235,6 @@ class TodoAppUI(ctk.CTk):
         if not search_term:
             return tasks_by_date
         
-        # Filter tasks by search term
         search_term = search_term.lower()
         return {date: [task for task in tasks if search_term in task.summary.lower()] 
                 for date, tasks in tasks_by_date.items() 
@@ -1401,537 +1243,418 @@ class TodoAppUI(ctk.CTk):
     def _get_tasks_by_date_dict(self):
         """Get tasks organized by date from the cache."""
         return self.calendar_manager.cache.tasks_by_date.copy()
-
-    def _update_monthly_view_data(self, search_term=""):
-        """Update the monthly view with data for the current month."""
-        # Make sure calendar cells exist
-        if not self.calendar_cells:
-            self._create_monthly_view_structure()
-        
-        # Update month header with current month name
-        if hasattr(self, 'month_year_label'):
-            self.month_year_label.configure(text=f"{calendar.month_name[self.displayed_month]} {self.displayed_year}")
-        
-        # Get calendar for this month
-        month_calendar = calendar.monthcalendar(self.displayed_year, self.displayed_month)
-        
-        # Setup calendar cell dates (don't clear cells first anymore)
-        self._setup_calendar_cell_dates(month_calendar)
-        
-        # Define callbacks for background loading
-        def on_events_loaded(events):
-            # Process events into tasks by date
-            tasks_by_date = self._process_events_for_monthly_view(events)
-                
-            # Update the UI with these tasks
-            self._update_calendar_cells(tasks_by_date, search_term)
             
-        def on_fetch_error(error):
-            self.show_alert(f"Error fetching events: {str(error)}", alert_type="error", duration=4000)
+    def build_daily_view(self, search_term=""):
+        """Build the daily view with all tasks organized by date."""
+        self.clear_widget(self.daily_content)
         
-        # Check if we have cached data for this month
-        month_key = (self.displayed_year, self.displayed_month)
+        tasks_by_date = self.get_filtered_tasks_by_date(search_term)
         
-        # First, clear the cache for the current month to ensure fresh data
-        self.calendar_manager.clear_cache_for_month(self.displayed_year, self.displayed_month)
+        sorted_dates = sorted(tasks_by_date.keys())
         
-        # Calculate date range for the month
-        start_date, end_date = self._get_month_date_range(self.displayed_year, self.displayed_month)
-            
-        # Queue the fetch in background
-        self.worker.add_task(
-            "fetch_month",
-            self.calendar_manager.fetch_events_for_range,
-            callback=on_events_loaded,
-            error_callback=on_fetch_error,
-            start_date=start_date,
-            end_date=end_date
-        )
-            
-        # Fetch holidays in background
-        self._fetch_holidays_for_month()
-            
-        # Trigger preload for adjacent months
-        self.after(100, lambda: self._preload_adjacent_months())
-    
-    def _process_events_for_monthly_view(self, events):
-        """Process events into tasks by date for monthly view."""
-        tasks_by_date = {}
-        
-        for event in events:
-            try:
-                # Extract the event date (in local time)
-                event_dt = parse_event_datetime(event, field='start')
-                local_date = event_dt.astimezone().date()
-                
-                # Skip events not in the displayed month (could happen with recurring events)
-                if local_date.month != self.displayed_month or local_date.year != self.displayed_year:
-                    continue
-                    
-                # Add to tasks by date
-                if local_date not in tasks_by_date:
-                    tasks_by_date[local_date] = []
-                    
-                # Convert event to task using cache manager's helper method
-                task = self.calendar_manager.cache._convert_event_to_task(event)
-                if task:
-                    tasks_by_date[local_date].append(task)
-            except Exception as e:
-                print(f"Error processing event for monthly view: {str(e)}")
-                
-        return tasks_by_date
-    
-    def _get_month_date_range(self, year, month):
-        """Calculate the start and end dates for a month."""
-        start_date = datetime(year, month, 1, tzinfo=timezone.utc)
-        
-        # Calculate end date (last day of month)
-        if month == 12:
-            end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
-        else:
-            end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
-            
-        return start_date, end_date
-    
-    def _fetch_holidays_for_month(self):
-        """Fetch holidays for the current month in background."""
-        
-        def on_holidays_loaded(holidays):
-            # Update cells with holiday information
-            for date, holiday_name in holidays.items():
-                # Find cell for this date
-                for row_idx, week in enumerate(calendar.monthcalendar(self.displayed_year, self.displayed_month)):
-                    for col_idx, day_num in enumerate(week):
-                        if day_num == date.day:
-                            cell_data = self.calendar_cells.get((row_idx, col_idx))
-                            if cell_data:
-                                # Check if holiday already exists
-                                current_holiday = cell_data['current_state']['holiday']
-                                if current_holiday != holiday_name:
-                                    # Update state and add holiday to cell
-                                    cell_data['current_state']['holiday'] = holiday_name
-                                    self._add_holiday_to_cell(cell_data['tasks_frame'], holiday_name, 
-                                                             (self.displayed_year, self.displayed_month))
-        
-        def on_holiday_error(error):
-            print(f"Error fetching holidays: {str(error)}")
-            
-        # Queue holiday fetch in background
-        self.worker.add_task(
-            "fetch_holidays",
-            self.calendar_manager.fetch_holidays,
-            callback=on_holidays_loaded,
-            error_callback=on_holiday_error,
-            year=self.displayed_year,
-            month=self.displayed_month
-        )
-    
-    def _preload_adjacent_months(self):
-        """Preload data for adjacent months to improve navigation experience."""
-        if self.preload_active:
+        if not sorted_dates:
+            no_tasks_label = QLabel("No tasks found for this period")
+            no_tasks_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            no_tasks_label.setFont(QFont(FONT_HEADER, FONT_HEADER_SIZE))
+            self.daily_layout.addWidget(no_tasks_label)
+            self.daily_layout.addStretch(1)
             return
             
-        self.preload_active = True
+        tasks_by_month = {}
+        for day, tasks in tasks_by_date.items():
+            month_key = (day.year, day.month)
+            if month_key not in tasks_by_month:
+                tasks_by_month[month_key] = []
+            tasks_by_month[month_key].extend(tasks)
+            
+        self.month_containers = {}
         
-        try:
-            # Calculate adjacent months
-            prev_year, prev_month = self._get_prev_month(self.displayed_year, self.displayed_month)
-            next_year, next_month = self._get_next_month(self.displayed_year, self.displayed_month)
+        current_month = None
+        current_year = None
+        
+        for day in sorted_dates:
+            if current_year != day.year or current_month != day.month:
+                month_key = (day.year, day.month)
+                task_count = len(tasks_by_month.get(month_key, []))
                 
-            # Check if we already have data for these months
-            next_month_cached = self.calendar_manager.cache.month_is_cached(next_year, next_month)
-            prev_month_cached = self.calendar_manager.cache.month_is_cached(prev_year, prev_month)
-            
-            # Preload next month if not cached
-            if not next_month_cached:
-                self._preload_month_data(next_year, next_month)
-            
-            # Preload previous month if not cached
-            if not prev_month_cached:
-                self._preload_month_data(prev_year, prev_month)
+                self.create_month_separator(day, task_count)
                 
-        except Exception as e:
-            print(f"Preload error: {str(e)}")
-        finally:
-            self.preload_active = False
+                current_month = day.month
+                current_year = day.year
+                
+            month_key = (day.year, day.month)
+            if month_key in self.month_containers:
+                self.create_day_content(day, tasks_by_date[day], self.month_containers[month_key]['container'])
+                
+    def create_month_separator(self, day, task_count):
+        """Create a month/year separator with a simple text header."""
+        month_key = (day.year, day.month)
+        
+        separator_frame = QFrame()
+        separator_frame.setStyleSheet("background-color: #262640;")
+        separator_frame.setMinimumHeight(40)
+        self.daily_layout.addWidget(separator_frame)
+        
+        separator_layout = QVBoxLayout(separator_frame)
+        separator_layout.setContentsMargins(PADDING, PADDING//2, PADDING, PADDING//2)
+        separator_layout.setSpacing(0)
+        
+        header_layout = QHBoxLayout()
+        
+        month_year_text = format_datetime(day, 'month_year')
+        task_count_text = f"({task_count} task{'s' if task_count != 1 else ''})"
+        
+        month_label = QLabel(f"📅  {month_year_text}")
+        month_label.setFont(QFont(FONT_HEADER, FONT_HEADER_SIZE, QFont.Weight.Bold))
+        header_layout.addWidget(month_label, 1)
+        
+        count_label = QLabel(task_count_text)
+        count_label.setStyleSheet("color: #AAAAFF;")
+        count_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+        header_layout.addWidget(count_label)
+        
+        separator_layout.addLayout(header_layout)
+        
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("background-color: #3A3A5C;")
+        divider.setFixedHeight(2)
+        separator_layout.addWidget(divider)
+        
+        month_container = QWidget()
+        month_layout = QVBoxLayout(month_container)
+        month_layout.setContentsMargins(0, 0, 0, 0)
+        month_layout.setSpacing(PADDING//2)
+        
+        self.daily_layout.addWidget(month_container)
+        
+        self.month_containers[month_key] = {
+            'frame': separator_frame,
+            'header_label': month_label,
+            'container': month_container,
+            'expanded': True
+        }
+            
+    def create_day_content(self, day, tasks, parent_container):
+        """Create the content for a single day."""
+        day_frame = QFrame()
+        day_frame.setStyleSheet(f"background-color: {BACKGROUND_COLOR};")
+        
+        day_layout = QHBoxLayout(day_frame)
+        day_layout.setContentsMargins(PADDING, PADDING//2, PADDING, PADDING//2)
+        
+        date_strip = self.create_date_strip(day)
+        day_layout.addWidget(date_strip)
+        
+        tasks_container = QWidget()
+        tasks_layout = QVBoxLayout(tasks_container)
+        tasks_layout.setContentsMargins(PADDING, 0, 0, 0)
+        tasks_layout.setSpacing(PADDING//2)
+        
+        for task in tasks:
+            task_card = self.create_task_card(task, False)
+            tasks_layout.addWidget(task_card)
+            
+        day_layout.addWidget(tasks_container, 1)
+        
+        parent_layout = parent_container.layout()
+        parent_layout.addWidget(day_frame)
+        
+    def create_date_strip(self, day):
+        """Create the date strip showing weekday and date."""
+        date_strip = QWidget()
+        date_strip.setMinimumWidth(50)
+        
+        strip_layout = QVBoxLayout(date_strip)
+        strip_layout.setContentsMargins(0, 0, 0, 0)
+        strip_layout.setSpacing(0)
+        
+        weekday_label = QLabel(format_datetime(day, 'weekday'))
+        weekday_label.setFont(QFont(FONT_DAY, FONT_DAY_SIZE, QFont.Weight.Bold))
+        weekday_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        strip_layout.addWidget(weekday_label)
+        
+        day_label = QLabel(format_datetime(day, 'day'))
+        day_label.setFont(QFont(FONT_DATE, FONT_DATE_SIZE, QFont.Weight.Bold))
+        day_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        strip_layout.addWidget(day_label)
+        
+        strip_layout.addStretch(1)
+        
+        return date_strip
+        
+    def create_task_card(self, task, is_monthly_view=False):
+        """Create a card for displaying a task."""
+        task_card = QFrame()
+        
+        if is_monthly_view:
+            task_card.setStyleSheet("background-color: transparent; border: none;")
+            task_card.setFixedHeight(18)
+            task_card.setMaximumWidth(170)
+        else:
+            task_card.setStyleSheet(f"background-color: {CARD_COLOR}; border-radius: 6px;")
+        
+        task_card.mousePressEvent = lambda e, t=task: self.open_task_dialog(t)
+        
+        card_layout = QHBoxLayout(task_card) if is_monthly_view else QVBoxLayout(task_card)
+        
+        if is_monthly_view:
+            card_layout.setContentsMargins(0, 0, 0, 0)
+            card_layout.setSpacing(2)
+        else:
+            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setSpacing(4)
+        
+        time_str = format_task_time(task.start_dt, task.end_dt)
+        
+        summary = task.summary
+        if is_monthly_view and len(summary) > 15:
+            display_summary = f"{summary[:15]}..."
+        else:
+            display_summary = summary
+            
+        if is_monthly_view:
+            local_start = task.start_dt.astimezone()
+            bullet_color = "#50A0FF"
+            
+            if local_start.hour < 12:
+                bullet_color = "#60C060"
+            elif local_start.hour >= 17:
+                bullet_color = "#FF8050"
+                
+            bullet_label = QLabel("•")
+            bullet_label.setStyleSheet(f"color: {bullet_color}; font-weight: bold; font-size: 14px; background: transparent; border: none;")
+            bullet_label.setFixedWidth(15)
+            card_layout.addWidget(bullet_label)
+            
+            start_time = format_datetime(local_start, 'time', include_minutes=False)
+            time_label = QLabel(start_time)
+            time_label.setStyleSheet(f"color: {bullet_color}; background: transparent; border: none;")
+            time_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE - 2))
+            time_label.setFixedWidth(45)
+            card_layout.addWidget(time_label)
+            
+            task_label = QLabel(display_summary)
+            task_label.setStyleSheet("color: white; background: transparent; border: none;")
+            task_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE - 1))
+            task_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            task_label.setWordWrap(False)
+            card_layout.addWidget(task_label, 1)
+        else:
+            summary_label = QLabel(display_summary)
+            summary_label.setStyleSheet("color: white;")
+            summary_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+            summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_layout.addWidget(summary_label)
+            
+            time_label = QLabel(time_str)
+            time_label.setStyleSheet("color: white;")
+            time_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE))
+            time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_layout.addWidget(time_label)
+            
+        return task_card
+        
+    def clear_widget(self, widget):
+        """Clear all child widgets from a container."""
+        if widget is None:
+            return
+            
+        layout = widget.layout()
+        if layout is not None:
+            while layout.count():
+                item = layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+                elif item.layout():
+                    self.clear_widget(item.widget())
     
-    def _get_prev_month(self, year, month):
-        """Get the previous month's year and month values."""
-        return (year - 1, 12) if month == 1 else (year, month - 1)
-    
-    def _get_next_month(self, year, month):
-        """Get the next month's year and month values."""
-        return (year + 1, 1) if month == 12 else (year, month + 1)
-            
-    def _preload_month_data(self, year, month):
-        """Preload data for a specific month."""
-        def on_events_loaded(events):
-            # Processing is handled automatically by the cache
-            pass
-        
-        def on_error(error):
-            print(f"Error preloading data for {month}/{year}: {str(error)}")
-        
-        # Calculate date range for the month
-        start_date, end_date = self._get_month_date_range(year, month)
-        
-        # Queue the fetch in background
-        self.worker.add_task(
-            "preload",
-            self.calendar_manager.fetch_events_for_range,
-            callback=on_events_loaded,
-            error_callback=on_error,
-            start_date=start_date,
-            end_date=end_date
-        )
-        
-        # Also preload holidays
-        self.worker.add_task(
-            "preload",
-            self.calendar_manager.fetch_holidays,
-            error_callback=on_error,
-            year=year,
-            month=month
-        )
-    
-    def _add_holiday_to_cell(self, parent_frame, holiday_name, month_key=None):
-        """Add a holiday indicator at the top of a cell."""
-        # Check if holiday already exists with the same name
-        for widget in parent_frame.winfo_children():
-            if (isinstance(widget, ctk.CTkFrame) and 
-                widget.cget("fg_color") == "#2C3D4D" and 
-                hasattr(widget, 'holiday_name') and
-                widget.holiday_name == holiday_name):
-                # Holiday already exists, no need to recreate
-                return
-                
-        # Find the cell data for this parent_frame
-        cell_data = None
-        for data in self.calendar_cells.values():
-            if data['tasks_frame'] == parent_frame:
-                cell_data = data
-                break
-                
-        # Update cell state if found
-        if cell_data:
-            cell_data['current_state']['holiday'] = holiday_name
-        
-        # Create holiday indicator frame at the top
-        holiday_frame = ctk.CTkFrame(parent_frame, fg_color="#2C3D4D", corner_radius=4, height=20)
-        holiday_frame.pack(fill="x", padx=2, pady=(0, 2), side="top")
-        
-        # Store month information in the frame to help with clearing
-        if month_key:
-            holiday_frame.month_key = month_key
-            
-        # Store holiday name for comparison
-        holiday_frame.holiday_name = holiday_name
-        
-        # Holiday label
-        holiday_label = ctk.CTkLabel(holiday_frame, 
-                                text=f"🎉 {holiday_name}", 
-                                font=FONT_SMALL, 
-                                text_color="#FFFFFF", 
-                                anchor="w")
-        holiday_label.pack(anchor="w", fill="x", padx=3, pady=1)
-    
-    def _setup_calendar_cell_dates(self, month_calendar):
-        """Set up the date numbers in calendar cells while waiting for data."""
-        today = datetime.now().date()
-        
-        row_idx = 0
-        for week in month_calendar:
-            for col_idx, day_num in enumerate(week):
-                cell_data = self.calendar_cells.get((row_idx, col_idx))
-                if not cell_data:
-                    continue
-                    
-                if day_num == 0:  # Day not in current month
-                    cell_data['frame'].configure(fg_color="#1E1E2F")  # Darker background
-                    cell_data['current_state']['is_current_month'] = False
-                    cell_data['current_state']['date'] = None
-                    continue
-                    
-                # Set up the cell for a day in the current month
-                current_date = datetime(self.displayed_year, self.displayed_month, day_num).date()
-                
-                # Track if date has changed
-                date_changed = cell_data['current_state']['date'] != current_date
-                today_changed = (current_date == today) != cell_data['current_state']['is_today']
-                
-                # Update state
-                cell_data['current_state']['date'] = current_date
-                cell_data['current_state']['is_current_month'] = True
-                cell_data['current_state']['is_today'] = (current_date == today)
-                
-                # Only update the UI if the date has changed
-                if date_changed or today_changed:
-                    # Configure cell appearance for today highlighting
-                    self._configure_cell_appearance(cell_data, current_date, day_num, today)
-                
-                # Bind day label for creating tasks
-                cell_data['day_label'].bind("<Button-1>", lambda e, d=current_date: self.open_task_dialog_for_date(d))
-            row_idx += 1
-    
-    def _update_calendar_cells(self, tasks_by_date, search_term=""):
-        """Update calendar cells with task data."""
-        month_calendar = calendar.monthcalendar(self.displayed_year, self.displayed_month)
-        today = datetime.now().date()
-        MAX_TASKS_PER_CELL = 3  # Limit tasks per cell
-        
-        row_idx = 0
-        for week in month_calendar:
-            for col_idx, day_num in enumerate(week):
-                cell_data = self.calendar_cells.get((row_idx, col_idx))
-                if not cell_data:
-                    continue
-                    
-                if day_num == 0:  # Day not in current month
-                    # Update current state
-                    cell_data['current_state']['is_current_month'] = False
-                    cell_data['current_state']['date'] = None
-                    cell_data['current_state']['tasks'] = []
-                    continue  # Skip - already set up in _setup_calendar_cell_dates
-                    
-                # Set up the cell for a day in the current month
-                current_date = datetime(self.displayed_year, self.displayed_month, day_num).date()
-                
-                # Filter tasks for the day
-                tasks_today = tasks_by_date.get(current_date, [])
-                if search_term:
-                    tasks_today = [t for t in tasks_today if search_term.lower() in t.summary.lower()]
-                
-                # Get task IDs for state comparison
-                task_ids = [getattr(t, 'task_id', None) for t in tasks_today]
-                current_task_ids = [getattr(t, 'task_id', None) for t in cell_data['current_state']['tasks']]
-                
-                # Only update if the tasks have changed
-                tasks_changed = set(task_ids) != set(current_task_ids)
-                date_changed = cell_data['current_state']['date'] != current_date
-                today_changed = (current_date == today) != cell_data['current_state']['is_today']
-                
-                # Update if anything has changed
-                if tasks_changed or date_changed or today_changed:
-                    # Update state
-                    cell_data['current_state']['date'] = current_date
-                    cell_data['current_state']['tasks'] = tasks_today
-                    cell_data['current_state']['is_current_month'] = True
-                    cell_data['current_state']['is_today'] = (current_date == today)
-                    
-                    # Update today highlighting if needed
-                    if date_changed or today_changed:
-                        self._configure_cell_appearance(cell_data, current_date, day_num, today)
-                    
-                    # Update tasks if needed
-                    if tasks_changed:
-                        # Clear existing task widgets first (but keep holiday frames)
-                        for widget in cell_data['tasks_frame'].winfo_children():
-                            if not isinstance(widget, ctk.CTkFrame) or not widget.cget("fg_color") == "#2C3D4D":
-                                # Keep holiday frames (blue background)
-                                widget.destroy()
-                        
-                        # Add tasks
-                        if tasks_today:
-                            self._add_tasks_to_cell(cell_data['tasks_frame'], tasks_today, MAX_TASKS_PER_CELL)
-            row_idx += 1
-
-    def _setup_navbar(self):
-        """Set up the navigation bar with search and controls."""
-        self.nav_frame = ctk.CTkFrame(self, fg_color=NAV_BG_COLOR, height=50)
-        self.nav_frame.pack(fill="x")
-
-        # Search field
-        self.search_entry = ctk.CTkEntry(self.nav_frame, placeholder_text="Search tasks...", width=200)
-        self.search_entry.pack(side="left", padx=PADDING)
-        self.search_entry.bind("<KeyRelease>", lambda e: self.filter_content())
-
-        # Label
-        self.nav_label = ctk.CTkLabel(self.nav_frame, text="Navigation Bar", font=FONT_HEADER, text_color=TEXT_COLOR)
-        self.nav_label.pack(side="left", padx=PADDING, pady=PADDING)
-
-        # Add Task button
-        self.add_task_btn = ctk.CTkButton(self.nav_frame, text="Add Task", command=self.open_task_dialog)
-        self.add_task_btn.pack(side="right", padx=PADDING, pady=PADDING)
-
-    def _setup_main_layout(self):
-        """Set up the main layout including sidebar and content areas."""
-        self.main_frame = ctk.CTkFrame(self, fg_color=BACKGROUND_COLOR)
-        self.main_frame.pack(fill="both", expand=True)
-
-        # Sidebar with view buttons
-        self._setup_sidebar()
-        
-        # Views container for holding daily and monthly views
-        self.views_container = ctk.CTkFrame(self.main_frame, fg_color=BACKGROUND_COLOR)
-        self.views_container.pack(side="right", fill="both", expand=True)
-
-        # Create the scrollable frame for daily view
-        self.content_frame = ctk.CTkScrollableFrame(self.views_container, fg_color=BACKGROUND_COLOR)
-        self.content_frame.pack(fill="both", expand=True)
-        
-        # Initialize the monthly view frame but don't pack it yet
-        self.monthly_view_frame = ctk.CTkFrame(self.views_container, fg_color=BACKGROUND_COLOR)
-        
-        # Build initial content for the default view
-        self.build_daily_view()
-        
-    def _setup_sidebar(self):
-        """Set up the sidebar with view selection buttons."""
-        self.sidebar = ctk.CTkFrame(self.main_frame, fg_color=NAV_BG_COLOR, width=200)
-        self.sidebar.pack(side="left", fill="y")
-
-        # View buttons
-        buttons = ["Daily View", "Monthly View"]
-        for btn_text in buttons:
-            btn = ctk.CTkButton(self.sidebar, text=btn_text, command=lambda x=btn_text: self.switch_view(x))
-            btn.pack(pady=10, padx=10, fill="x")
-            
-    def show_alert(self, message, alert_type="info", duration=DEFAULT_ALERT_DURATION):
-        """Show an alert/notification message."""
-        colors = {"error": ERROR_COLOR, "info": SUCCESS_COLOR}
-        self.alert_label.configure(text=message, 
-                                 text_color=colors.get(alert_type, TEXT_COLOR))
-        self.alert_frame.pack(fill="x")
-        self.after(duration, self.clear_alert)
-
-    def clear_alert(self):
-        """Clear the current alert/notification."""
-        self.alert_label.configure(text="")
-        self.alert_frame.pack_forget()
-        
-    def switch_view(self, view):
-        """Switch between different views (daily, monthly)."""
-        # Hide both views first
-        self.content_frame.pack_forget()
-        self.monthly_view_frame.pack_forget()
-            
-        if view == "Daily View":
-            self.current_view = "daily"
-            self.content_frame.pack(fill="both", expand=True)
-            self.build_daily_view()
-        elif view == "Monthly View":
-            self.current_view = "monthly"
-            # Show the monthly view frame
-            self.monthly_view_frame.pack(fill="both", expand=True)
-            # Only create structure if it hasn't been built yet
-            if not self.monthly_view_frame.winfo_children():
-                self._create_monthly_view_structure()
-            # Update the data in the monthly view
-            self._update_monthly_view_data(self.search_entry.get())
-
     def filter_content(self):
         """Filter view content based on search term."""
-        search_term = self.search_entry.get()
+        search_term = self.search_entry.text()
         if self.current_view == "daily":
             self.build_daily_view(search_term)
         elif self.current_view == "monthly":
             self._update_monthly_view_data(search_term)
             
-    def _create_monthly_view_structure(self):
-        """Creates the static widgets for the monthly view frame ONCE."""
-        # Clear any existing child widgets in the monthly view frame
-        for widget in self.monthly_view_frame.winfo_children():
-            widget.destroy()
+    def switch_view(self, view):
+        """Switch between different views."""
+        if view == "Daily View":
+            self.current_view = "daily"
+            self.views_stack.setCurrentIndex(0)
+            self.build_daily_view(self.search_entry.text())
+            QTimer.singleShot(100, self.scroll_to_today)
+        elif view == "Monthly View":
+            self.current_view = "monthly"
+            self.views_stack.setCurrentIndex(1)
+            if not self.monthly_view.layout().count():
+                self._create_monthly_view_structure()
+            self._update_monthly_view_data(self.search_entry.text())
+            QTimer.singleShot(100, self.scroll_to_today)
             
-        # --- Header for Month Navigation ---
+    def open_task_dialog(self, task=None):
+        """Open dialog to create or edit a task."""
+        dialog = TaskDialog(self, self.on_task_dialog_confirm, task)
+        dialog.exec()
+        
+    def open_task_dialog_for_date(self, date):
+        """Open task dialog pre-set for a specific date."""
+        local_tz = datetime.now().astimezone().tzinfo
+        now = datetime.now()
+        
+        if now.minute > 0 or now.second > 0:
+            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_hour = now
+            
+        start_dt = datetime.combine(date, next_hour.time())
+        start_dt = start_dt.replace(tzinfo=local_tz)
+        start_dt_utc = local_to_utc(start_dt)
+        
+        end_dt_utc = start_dt_utc + timedelta(hours=1)
+
+        temp_task = Task("", start_dt_utc, end_dt_utc)
+        self.open_task_dialog(temp_task)
+        
+    def on_task_dialog_confirm(self, task):
+        """Handle confirmed task from dialog."""
+        event = {
+            'summary': task.summary,
+            'start': {'dateTime': format_iso_for_api(task.start_dt), 'timeZone': 'UTC'},
+            'end': {'dateTime': format_iso_for_api(task.end_dt), 'timeZone': 'UTC'}
+        }
+        
+        if task.task_id:
+            self.worker.add_task(
+                "update_task",
+                self.calendar_manager.update_event,
+                calendar_id='primary',
+                event_id=task.task_id,
+                updated_event=event
+            )
+        else:
+            self.worker.add_task(
+                "create_task",
+                self.calendar_manager.add_event,
+                calendar_id='primary',
+                event=event
+            )
+            
+    def delete_task(self, task):
+        """Delete a task from the calendar."""
+        if not task or not task.task_id:
+            self.show_alert("Cannot delete task: no task ID", duration=3000)
+            return
+            
+        self.worker.add_task(
+            "delete_task",
+            self.calendar_manager.delete_event,
+            calendar_id='primary',
+            event_id=task.task_id
+        )
+
+    def _create_monthly_view_structure(self):
+        """Create the static widgets for the monthly view."""
+        self.clear_widget(self.monthly_view)
         self._create_month_header()
+        self._create_calendar_grid()
         
-        # --- Main Container (non-scrollable) ---
-        container_frame = ctk.CTkFrame(self.monthly_view_frame, fg_color=BACKGROUND_COLOR)
-        container_frame.pack(fill="both", expand=True, padx=4, pady=4)
-        
-        # Create the calendar grid frame
-        calendar_frame = ctk.CTkFrame(container_frame, fg_color=BACKGROUND_COLOR)
-        calendar_frame.pack(fill="both", expand=True)
-        
-        # --- Static Day Headers ---
-        self._create_day_headers(calendar_frame)
-        
-        # --- Create Calendar Grid Cells ---
-        self._setup_calendar_cells(calendar_frame)
-    
     def _create_month_header(self):
         """Create the month navigation header."""
-        header_frame = ctk.CTkFrame(self.monthly_view_frame, fg_color=NAV_BG_COLOR)
-        header_frame.pack(fill="x", pady=(0, PADDING/4))  # Reduced padding to maximize space
-
-        # Previous month button
-        prev_button = ctk.CTkButton(header_frame, text="<", width=30, command=self.prev_month)
-        prev_button.pack(side="left", padx=PADDING, pady=1)  # Reduced padding
-
-        # Month and year label
-        self.month_year_label = ctk.CTkLabel(header_frame, 
-                                     text=f"{calendar.month_name[self.displayed_month]} {self.displayed_year}", 
-                                     font=FONT_HEADER, 
-                                     text_color=TEXT_COLOR)
-        self.month_year_label.pack(side="left", expand=True, pady=1)  # Reduced padding
-
-        # Next month button
-        next_button = ctk.CTkButton(header_frame, text=">", width=30, command=self.next_month)
-        next_button.pack(side="right", padx=PADDING, pady=1)  # Reduced padding
-    
-    def _create_day_headers(self, calendar_frame):
-        """Create the day of week headers for the calendar."""
+        header_frame = QFrame()
+        header_frame.setStyleSheet(f"background-color: {NAV_BG_COLOR};")
+        header_frame.setMinimumHeight(50)
+        
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
+        
+        prev_button = QPushButton("<")
+        prev_button.setFixedWidth(40)
+        prev_button.clicked.connect(self.prev_month)
+        header_layout.addWidget(prev_button)
+        
+        month_date = datetime(self.displayed_year, self.displayed_month, 1)
+        self.month_year_label = QLabel(format_datetime(month_date, 'month_year'))
+        self.month_year_label.setFont(QFont(FONT_HEADER, FONT_HEADER_SIZE, QFont.Weight.Bold))
+        self.month_year_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_layout.addWidget(self.month_year_label, 1)
+        
+        next_button = QPushButton(">")
+        next_button.setFixedWidth(40)
+        next_button.clicked.connect(self.next_month)
+        header_layout.addWidget(next_button)
+        
+        self.monthly_layout.addWidget(header_frame)
+        
+    def _create_calendar_grid(self):
+        """Create the calendar grid for monthly view."""
+        grid_container = QFrame()
+        grid_container.setStyleSheet(f"background-color: {BACKGROUND_COLOR};")
+        
+        grid_layout = QGridLayout(grid_container)
+        grid_layout.setSpacing(1)
+        
         days_of_week = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
         for col, day_name in enumerate(days_of_week):
-            calendar_frame.grid_columnconfigure(col, weight=1, uniform="calendar_col")
-            day_header = ctk.CTkFrame(calendar_frame, fg_color="#1A1A2E", height=25)
-            day_header.grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
-            day_header.grid_propagate(False)
+            day_header = QFrame()
+            day_header.setStyleSheet("background-color: #1A1A2E;")
+            day_header.setMinimumHeight(25)
+            day_header.setMaximumHeight(25)
             
-            day_label = ctk.CTkLabel(day_header, text=day_name, font=FONT_DAY, text_color=TEXT_COLOR)
-            day_label.pack(expand=True)
-    
-    def _setup_calendar_cells(self, calendar_frame):
-        """Create uniform calendar grid cells for the month."""
-        # Reset cells dictionary
+            header_layout = QVBoxLayout(day_header)
+            header_layout.setContentsMargins(5, 2, 5, 2)
+            
+            label = QLabel(day_name)
+            label.setFont(QFont(FONT_DAY, FONT_DAY_SIZE, QFont.Weight.Bold))
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            header_layout.addWidget(label)
+            
+            grid_layout.addWidget(day_header, 0, col)
+        
         self.calendar_cells = {}
         
-        # Get the current month's calendar to determine number of weeks
         month_calendar = calendar.monthcalendar(self.displayed_year, self.displayed_month)
-        num_weeks = len(month_calendar)  # This will be 5 or 6 depending on the month
+        num_weeks = len(month_calendar)
         
-        # Create grid based on actual number of weeks needed
         for row_idx in range(num_weeks):
-            calendar_frame.grid_rowconfigure(row_idx + 1, weight=1, uniform="calendar_row")
-            
-            for col_idx in range(7):  # 7 days per week
-                # Create cell frame with uniform size
-                cell_frame = ctk.CTkFrame(calendar_frame, fg_color=BACKGROUND_COLOR, 
-                                       border_width=1, border_color="#333344")
-                cell_frame.grid(row=row_idx + 1, column=col_idx, sticky="nsew", padx=1, pady=1)
-                cell_frame.grid_propagate(False)  # Prevent content from affecting cell size
+            for col_idx in range(7):
+                cell = self._create_calendar_cell(row_idx, col_idx)
+                grid_layout.addWidget(cell, row_idx + 1, col_idx)
                 
-                # Create internal structure for the cell
-                self._create_cell_structure(cell_frame, row_idx, col_idx)
-    
-    def _create_cell_structure(self, cell_frame, row_idx, col_idx):
-        """Create the internal structure for a calendar cell."""
-        # Content frame inside cell
-        content_frame = ctk.CTkFrame(cell_frame, fg_color="transparent")
-        content_frame.pack(fill="both", expand=True, padx=1, pady=1)
+        for col in range(7):
+            grid_layout.setColumnStretch(col, 1)
+        for row in range(num_weeks):
+            grid_layout.setRowStretch(row + 1, 1)
+            
+        self.monthly_layout.addWidget(grid_container, 1)
         
-        # Day number label - fixed size area at top-right
-        day_label = ctk.CTkLabel(content_frame, text="", font=FONT_LABEL, 
-                              text_color=TEXT_COLOR, anchor="e")
-        day_label.pack(side="top", anchor="ne", padx=2, pady=1)
+    def _create_calendar_cell(self, row, col):
+        """Create a single calendar cell."""
+        cell = QFrame()
+        cell.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; border: 1px solid #333344;")
+        cell.setMinimumSize(180, 120)
         
-        # Special day label (not used with our holiday implementation)
-        special_label = ctk.CTkLabel(content_frame, text="", font=FONT_SMALL,
-                                 text_color="#AAAAAA", anchor="w")
-        special_label.pack(side="bottom", anchor="sw", padx=1, pady=0)
+        cell_layout = QVBoxLayout(cell)
+        cell_layout.setContentsMargins(2, 2, 2, 2)
+        cell_layout.setSpacing(1)
         
-        # Tasks area (includes holidays and regular tasks)
-        tasks_frame = ctk.CTkFrame(content_frame, fg_color="transparent", corner_radius=0)
-        tasks_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        day_label = QLabel("")
+        day_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+        day_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        day_label.setFixedHeight(35)
+        cell_layout.addWidget(day_label)
         
-        # Store references for updating
-        self.calendar_cells[(row_idx, col_idx)] = {
-            'frame': cell_frame,
-            'content': content_frame,
+        tasks_container = QFrame()
+        tasks_container.setStyleSheet("background: transparent; border: none;")
+        tasks_layout = QVBoxLayout(tasks_container)
+        tasks_layout.setContentsMargins(2, 0, 2, 0)
+        tasks_layout.setSpacing(1)
+        cell_layout.addWidget(tasks_container, 1) 
+        
+        self.calendar_cells[(row, col)] = {
+            'frame': cell,
             'day_label': day_label,
-            'special_label': special_label,
-            'tasks_frame': tasks_frame,
+            'tasks_container': tasks_container,
             'current_state': {
                 'date': None,
                 'tasks': [],
@@ -1941,164 +1664,279 @@ class TodoAppUI(ctk.CTk):
             }
         }
         
-    def _clear_calendar_cells(self):
-        """Clear all calendar cells before updating."""
-        for cell_key, cell_data in self.calendar_cells.items():
-            # Reset the UI elements
-            cell_data['day_label'].configure(text="")
-            cell_data['special_label'].configure(text="")
+        cell.mousePressEvent = lambda e, r=row, c=col: self._on_cell_clicked(r, c)
+        return cell
+        
+    def _on_cell_clicked(self, row, col):
+        """Handle calendar cell click to create a new task."""
+        cell_data = self.calendar_cells.get((row, col))
+        if cell_data and cell_data['current_state']['date']:
+            self.open_task_dialog_for_date(cell_data['current_state']['date'])
             
-            # Clear all widgets in the tasks frame
-            for widget in cell_data['tasks_frame'].winfo_children():
-                widget.destroy()
+    def _update_monthly_view_data(self, search_term="", force_refresh=False):
+        """Update the monthly view with current month's data."""
+        if hasattr(self, 'month_year_label'):
+            month_date = datetime(self.displayed_year, self.displayed_month, 1)
+            self.month_year_label.setText(format_datetime(month_date, 'month_year'))
+            
+        month_calendar = calendar.monthcalendar(self.displayed_year, self.displayed_month)
+        
+        self._setup_calendar_cell_dates(month_calendar)
+        
+        start_date, end_date = self._get_month_date_range(self.displayed_year, self.displayed_month)
+        
+        tasks_by_date = self.calendar_manager.cache.get_tasks_for_month(self.displayed_year, self.displayed_month)
+        
+        if tasks_by_date and not force_refresh:
+            self._update_calendar_cells(tasks_by_date, search_term)
+        else:
+            if force_refresh:
+                self.calendar_manager.clear_cache_for_month(self.displayed_year, self.displayed_month)
+            
+            self.worker.add_task(
+                "fetch_month",
+                self.calendar_manager.fetch_events_for_range,
+                start_date=start_date,
+                end_date=end_date
+            )
+        
+        holidays = self.calendar_manager.cache.get_holidays_for_month(self.displayed_year, self.displayed_month)
+        if not holidays or force_refresh:
+            self.worker.add_task(
+                "fetch_holidays",
+                self.calendar_manager.fetch_holidays,
+                year=self.displayed_year,
+                month=self.displayed_month
+            )
+         
+    def _setup_calendar_cell_dates(self, month_calendar):
+        """Set up date numbers in calendar cells."""
+        today = datetime.now().date()
+        
+        row_idx = 0
+        for week in month_calendar:
+            for col_idx, day_num in enumerate(week):
+                cell_data = self.calendar_cells.get((row_idx, col_idx))
+                if not cell_data:
+                    continue
+                    
+                if day_num == 0:
+                    cell_data['frame'].setStyleSheet("background-color: #1E1E2F; border: 1px solid #333344;")
+                    cell_data['day_label'].setText("")
+                    cell_data['current_state']['is_current_month'] = False
+                    cell_data['current_state']['date'] = None
+                    continue
+                    
+                current_date = datetime(self.displayed_year, self.displayed_month, day_num).date()
                 
-            # Reset visual appearance
-            cell_data['frame'].configure(fg_color=BACKGROUND_COLOR, border_color="#333344")
+                date_changed = cell_data['current_state']['date'] != current_date
+                today_changed = (current_date == today) != cell_data['current_state']['is_today']
+                
+                cell_data['current_state']['date'] = current_date
+                cell_data['current_state']['is_current_month'] = True
+                cell_data['current_state']['is_today'] = (current_date == today)
+                
+                if date_changed or today_changed:
+                    self.clear_widget(cell_data['tasks_container'])
+                    cell_data['current_state']['tasks'] = []
+                    cell_data['current_state']['holiday'] = None
+                
+                self._configure_cell_appearance(cell_data, current_date, day_num, today)
+                
+            row_idx += 1
             
-            # Reset the state tracking
-            cell_data['current_state'] = {
-                'date': None,
-                'tasks': [],
-                'holiday': None,
-                'is_current_month': False,
-                'is_today': False
-            }
-    
     def _configure_cell_appearance(self, cell_data, current_date, day_num, today):
-        """Configure the appearance of a calendar cell based on date type."""
+        """Configure the appearance of a calendar cell."""
         if current_date == today:
-            # Highlight today's cell with a subtle background and border
-            cell_data['frame'].configure(fg_color="#2D2D4D", border_color=HIGHLIGHT_COLOR)
-            cell_data['day_label'].configure(text=str(day_num), font=("Helvetica Neue", 12, "bold"), 
-                                           text_color="#FFFFFF")
-            # Make sure the task container is transparent to show events
-            if 'tasks_frame' in cell_data:
-                cell_data['tasks_frame'].configure(fg_color="transparent")
+            cell_data['frame'].setStyleSheet(f"background-color: #2D2D4D; border: 2px solid {HIGHLIGHT_COLOR};")
+            cell_data['day_label'].setStyleSheet("color: white; font-weight: bold;")
         else:
-            # Normal appearance for other days
-            cell_data['frame'].configure(fg_color=BACKGROUND_COLOR, border_color="#333344")
-            cell_data['day_label'].configure(text=str(day_num), font=FONT_LABEL)
-    
-    def prev_month(self):
-        """Navigate to the previous month in monthly view."""
-        self.displayed_year, self.displayed_month = self._get_prev_month(self.displayed_year, self.displayed_month)
-        
-        # Update the data without recreating structure
-        self._update_monthly_view_data(self.search_entry.get()) 
-        
-        # Preload data for next navigation
-        self.after(100, lambda: self._preload_adjacent_months())
-
-    def next_month(self):
-        """Navigate to the next month in monthly view."""
-        self.displayed_year, self.displayed_month = self._get_next_month(self.displayed_year, self.displayed_month)
+            cell_data['frame'].setStyleSheet(f"background-color: {BACKGROUND_COLOR}; border: 1px solid #333344;")
+            cell_data['day_label'].setStyleSheet("")
             
-        # Update the data without recreating structure
-        self._update_monthly_view_data(self.search_entry.get())
+        cell_data['day_label'].setText(str(day_num))
         
-        # Preload data for next navigation
-        self.after(100, lambda: self._preload_adjacent_months())
-        
-    def open_task_dialog_for_date(self, date):
-        """Open task dialog pre-set to a specific date."""
-        # Create a temporary default task to pre-set the date
-        # Use current hour rounded up to next hour as the default time
-        local_tz = datetime.now().astimezone().tzinfo
-        now = datetime.now()
-        
-        # Round up to the next hour
-        if now.minute > 0 or now.second > 0:
-            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_hour = now
+    def _update_holidays(self, holidays):
+        """Update cells with holiday information."""
+        if not holidays:
+            return
             
-        # Combine selected date with time
-        start_dt = datetime.combine(date, next_hour.time())
-        start_dt = start_dt.replace(tzinfo=local_tz)
-        start_dt_utc = local_to_utc(start_dt)
+        for date, holiday_name in holidays.items():
+            for cell_key, cell_data in self.calendar_cells.items():
+                if cell_data['current_state']['date'] == date:
+                    if cell_data['current_state']['holiday'] != holiday_name:
+                        cell_data['current_state']['holiday'] = holiday_name
+                        self._add_holiday_to_cell(cell_data['tasks_container'], holiday_name)
+                        
+    def _add_holiday_to_cell(self, container, holiday_name):
+        """Add a holiday indicator to a cell."""
+        holiday_frame = QFrame()
+        holiday_frame.setStyleSheet("background-color: transparent; border: none;")
+        holiday_frame.setMaximumHeight(18)
         
-        # Default 1 hour duration
-        end_dt_utc = start_dt_utc + timedelta(hours=1)
+        holiday_layout = QHBoxLayout(holiday_frame)
+        holiday_layout.setContentsMargins(0, 0, 0, 0) 
+        holiday_layout.setSpacing(1)
         
-        # Create temp task just to set the date
-        temp_task = Task("", start_dt_utc, end_dt_utc)
-        self.open_task_dialog(temp_task)
-
-# API WORKER THREAD
-class APIWorker:
-    """Worker thread for handling API calls without blocking the UI."""
-    def __init__(self, parent):
-        self.parent = parent
-        self.queue = queue.Queue()
-        self.running = True
-        self.event = threading.Event()
-        self.thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self.thread.start()
-        
-    def add_task(self, task_type, func, callback=None, error_callback=None, **kwargs):
-        """Add a task to the queue and signal the worker thread."""
-        self.queue.put((task_type, func, callback, error_callback, kwargs))
-        self.event.set()  # Signal that there's work to do
-        
-    def _worker_loop(self):
-        """Main worker loop that processes queued tasks using event notification."""
-        while self.running:
-            # Wait for the event to be set (new task or shutdown)
-            self.event.wait()
+        if len(holiday_name) > 20:
+            holiday_name = holiday_name[:17] + "..."
             
-            # Process all tasks in the queue
-            while not self.queue.empty() and self.running:
-                try:
-                    task_type, func, callback, error_callback, kwargs = self.queue.get(block=False)
-                    
-                    try:
-                        if task_type not in ['background_fetch', 'preload']:
-                            self.parent.after(0, lambda: self.parent.show_loading(True))
-                        
-                        result = func(**kwargs)
-                        
-                        if callback:
-                            cb = callback
-                            res = result
-                            self.parent.after(0, lambda cb=cb, res=res: cb(res))
-                            
-                    except Exception as e:
-                        print(f"Error in worker thread ({task_type}): {str(e)}")
-                        if error_callback:
-                            # Create a local copy of the error callback and error to avoid closure issues
-                            err_cb = error_callback
-                            err = e
-                            self.parent.after(0, lambda err_cb=err_cb, err=err: err_cb(err))
-                    
-                    finally:
-                        # Hide loading indicator
-                        if task_type not in ['background_fetch', 'preload']:
-                            self.parent.after(0, lambda: self.parent.show_loading(False))
-                        self.queue.task_done()
-                        
-                except queue.Empty:
-                    # Queue is empty now, rare case due to race condition
+        holiday_label = QLabel(f"🎉 {holiday_name}")
+        holiday_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE - 1))
+        holiday_label.setStyleSheet("color: #CCCCFF; background: transparent; border: none;")
+        holiday_layout.addWidget(holiday_label)
+        
+        container_layout = container.layout()
+        
+        for i in range(container_layout.count()):
+            widget = container_layout.itemAt(i).widget()
+            if widget and isinstance(widget, QFrame) and widget.layout() and widget.layout().count() > 0:
+                label = widget.layout().itemAt(0).widget()
+                if isinstance(label, QLabel) and label.text().startswith("🎉"):
+                    widget.deleteLater()
                     break
-            
-            # Clear the event since we've processed all tasks
-            self.event.clear()
                 
-    def stop(self):
-        """Stop the worker thread."""
-        self.running = False
-        self.event.set()  # Wake up the thread to check running state
-        self.thread.join(timeout=1.0)
+        container_layout.insertWidget(0, holiday_frame)
+        
+    def _update_calendar_cells(self, tasks_by_date, search_term=""):
+        """Update calendar cells with task data."""
+        for cell_key, cell_data in self.calendar_cells.items():
+            date = cell_data['current_state']['date']
+            if not date or not cell_data['current_state']['is_current_month']:
+                continue
+                
+            tasks = tasks_by_date.get(date, [])
+            if search_term:
+                tasks = [t for t in tasks if search_term.lower() in t.summary.lower()]
+
+            container = cell_data['tasks_container']
+            layout = container.layout()
+            
+            holiday_frames = []
+            for i in range(layout.count()):
+                widget = layout.itemAt(i).widget()
+
+                if widget and isinstance(widget, QFrame) and widget.layout() and widget.layout().count() > 0:
+                    first_child = widget.layout().itemAt(0).widget()
+                    if isinstance(first_child, QLabel) and first_child.text().startswith("🎉"):
+                        holiday_frames.append(widget)
+                    else:
+                        widget.deleteLater()
+                else:
+                    if widget:
+                        widget.deleteLater()
+                    
+            while layout.count():
+                item = layout.takeAt(0)
+                if item.widget() not in holiday_frames:
+                    if item.widget():
+                        item.widget().deleteLater()
+                        
+
+            for frame in holiday_frames:
+                layout.addWidget(frame)
+                
+            if tasks:
+                sorted_tasks = sorted(tasks, key=lambda t: t.start_dt)
+            
+                layout.setSpacing(1)
+                
+                for i, task in enumerate(sorted_tasks[:MAX_TASKS_PER_CELL]):
+                    task_card = self.create_task_card(task, True)
+                    layout.addWidget(task_card)
+                    
+                if len(tasks) > MAX_TASKS_PER_CELL:
+                    more_label = QLabel(f"+ {len(tasks) - MAX_TASKS_PER_CELL} more")
+                    more_label.setStyleSheet("color: #CCCCFF; font-size: 9px; background: transparent; border: none;")
+                    more_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE - 2))
+                    more_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+                    more_label.setFixedHeight(15)
+                    layout.addWidget(more_label)
+            elif not holiday_frames:
+                no_tasks_label = QLabel("No tasks")
+                no_tasks_label.setStyleSheet("color: #888888; font-style: italic; background: transparent; border: none;")
+                no_tasks_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE))
+                no_tasks_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(no_tasks_label)
+                
+            cell_data['current_state']['tasks'] = tasks
+            
+    def _get_month_date_range(self, year, month):
+        """Calculate the start and end dates for a month."""
+        start_date = datetime(year, month, 1, tzinfo=timezone.utc)
+        
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+        else:
+            end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
+            
+        return start_date, end_date
+        
+    def _get_prev_month(self, year, month):
+        """Get the previous month's year and month values."""
+        return (year - 1, 12) if month == 1 else (year, month - 1)
+    
+    def _get_next_month(self, year, month):
+        """Get the next month's year and month values."""
+        return (year + 1, 1) if month == 12 else (year, month + 1)
+        
+    def prev_month(self):
+        """Navigate to the previous month."""
+        self.displayed_year, self.displayed_month = self._get_prev_month(self.displayed_year, self.displayed_month)
+        self._update_monthly_view_data(self.search_entry.text())
+        
+    def next_month(self):
+        """Navigate to the next month."""
+        self.displayed_year, self.displayed_month = self._get_next_month(self.displayed_year, self.displayed_month)
+        self._update_monthly_view_data(self.search_entry.text())
+        
+    def closeEvent(self, event):
+        """Handle window close event."""
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+        event.accept()
+        
+    def scroll_to_today(self):
+        """Scroll to the current day in either daily or monthly view."""
+        today = datetime.now().date()
+        
+        if self.current_view == "daily":
+            month_key = (today.year, today.month)
+
+            if month_key in self.month_containers:
+                month_container = self.month_containers[month_key]['container']
+                
+                pos = month_container.pos().y()
+                self.daily_view.verticalScrollBar().setValue(pos)
+                
+                for widget in month_container.findChildren(QFrame):
+                    for child in widget.findChildren(QLabel):
+                        if child.text() == format_datetime(today, 'day') and pos > 0:
+                            day_pos = widget.pos().y() + pos
+                            self.daily_view.verticalScrollBar().setValue(day_pos)
+                            return
+        
+        elif self.current_view == "monthly":
+            if today.year != self.displayed_year or today.month != self.displayed_month:
+                self.displayed_year = today.year
+                self.displayed_month = today.month
+                self._update_monthly_view_data(self.search_entry.text())
 
 # APPLICATION ENTRY POINT
 if __name__ == "__main__":
-    # Set up CustomTkinter theme
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
-    
     # Initialize services
     auth_service = GoogleAuthService(SCOPES)
     calendar_manager = CalendarManager(auth_service)
     
-    # Start the application
-    app = TodoAppUI(calendar_manager)
-    app.mainloop()
+    # Create and start the application
+    app = QApplication(sys.argv)
+    
+    # Set style to fusion for better cross-platform appearance
+    app.setStyle("Fusion")
+    
+    # Create and show main window
+    main_window = TodoApp(calendar_manager)
+    main_window.show()
+    
+    # Start the event loop
+    sys.exit(app.exec()) 
