@@ -466,7 +466,7 @@ class TodoApp(QMainWindow):
                 month_key = (day.year, day.month)
                 task_count = len(tasks_by_month.get(month_key, []))
                 
-                if current_month is not None:  # Skip adding spacing for the first month
+                if current_month is not None:
                     self.daily_layout.addSpacing(20)
                 
                 self.create_month_separator(day, task_count)
@@ -1083,12 +1083,24 @@ class TodoApp(QMainWindow):
         self.displayed_year, self.displayed_month = self._get_next_month(self.displayed_year, self.displayed_month)
         self._update_monthly_view_data(self.search_entry.text())
         
+    def wheelEvent(self, event):
+        """Handle mouse wheel events to navigate through months in monthly view."""
+        if self.current_view == "monthly":
+            delta = event.angleDelta().y()
+            if delta < 0:  # Scrolling down
+                self.next_month()
+            elif delta > 0:  # Scrolling up
+                self.prev_month()
+            event.accept()
+        else:
+            # Let parent class handle wheel events for daily view
+            super().wheelEvent(event)
+        
     def closeEvent(self, event):
         """Handle window close event."""
         if hasattr(self, 'worker'):
             self.worker.stop()
         
-        # Stop the hot reloader when closing the app
         if hasattr(self, 'file_monitor'):
             self.file_monitor.stop()
             
