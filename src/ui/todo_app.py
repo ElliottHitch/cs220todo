@@ -39,7 +39,6 @@ class TodoApp(QMainWindow):
         
         self.loading = False
         
-        # Add flag to track initial app load
         self.initial_load = True
         
         self.init_ui()
@@ -75,7 +74,7 @@ class TodoApp(QMainWindow):
         nav_layout = QHBoxLayout(navbar)
         nav_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
         
-        title_label = QLabel("CS 220 To-Do List")
+        title_label = QLabel("To-Do List ")
         title_label.setFont(QFont(FONT_HEADER, FONT_HEADER_SIZE, QFont.Weight.Bold))
         nav_layout.addWidget(title_label)
         
@@ -90,18 +89,27 @@ class TodoApp(QMainWindow):
         
         nav_layout.addWidget(search_frame, 1)
         
+        button_container = QFrame()
+        button_layout = QHBoxLayout(button_container)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(PADDING)
+        
         today_button = QPushButton("Today")
         today_button.clicked.connect(self.scroll_to_today)
-        nav_layout.addWidget(today_button)
+        today_button.setFixedWidth(100)
+        button_layout.addWidget(today_button)
         
-        view_selector = QComboBox()
-        view_selector.addItems(["Daily View", "Monthly View"])
-        view_selector.currentTextChanged.connect(self.switch_view)
-        nav_layout.addWidget(view_selector)
+        self.view_toggle_button = QPushButton("Monthly View")
+        self.view_toggle_button.clicked.connect(self.toggle_view)
+        self.view_toggle_button.setFixedWidth(120)
+        button_layout.addWidget(self.view_toggle_button)
         
         add_button = QPushButton("Add Task")
         add_button.clicked.connect(lambda: self.open_task_dialog())
-        nav_layout.addWidget(add_button)
+        add_button.setFixedWidth(100)
+        button_layout.addWidget(add_button)
+        
+        nav_layout.addWidget(button_container)
         
         parent_layout.addWidget(navbar)
         
@@ -506,21 +514,22 @@ class TodoApp(QMainWindow):
         elif self.current_view == "monthly":
             self._update_monthly_view_data(search_term)
             
-    def switch_view(self, view):
-        """Switch between different views."""
-        if view == "Daily View":
-            self.current_view = "daily"
-            self.views_stack.setCurrentIndex(0)
-            self.build_daily_view(self.search_entry.text())
-            QTimer.singleShot(100, self.scroll_to_today)
-        elif view == "Monthly View":
+    def toggle_view(self):
+        """Toggle between daily and monthly views."""
+        if self.current_view == "daily":
             self.current_view = "monthly"
+            self.view_toggle_button.setText("Daily View")
             self.views_stack.setCurrentIndex(1)
             if not self.monthly_view.layout().count():
                 self._create_monthly_view_structure()
             self._update_monthly_view_data(self.search_entry.text())
-            QTimer.singleShot(100, self.scroll_to_today)
-    
+        else:
+            self.current_view = "daily"
+            self.view_toggle_button.setText("Monthly View")
+            self.views_stack.setCurrentIndex(0)
+            self.build_daily_view(self.search_entry.text())
+        QTimer.singleShot(100, self.scroll_to_today)
+        
     def open_task_dialog(self, task=None):
         """Open dialog to create or edit a task."""
         dialog = TaskDialog(self, self.on_task_dialog_confirm, task)
