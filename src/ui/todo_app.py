@@ -33,62 +33,55 @@ class FileChangeMonitor:
         self.dirs_to_monitor = dirs_to_monitor or ['src']
         self.watcher = QFileSystemWatcher()
         self.watched_files = []
-        self.file_timestamps = {}  # Keep track of file modification times
+        self.file_timestamps = {}
         self.check_timer = QTimer()
-        self.check_timer.setInterval(1000)  # Check every second
+        self.check_timer.setInterval(1000)
         self.check_timer.timeout.connect(self.check_for_changes)
         self.setup_watcher()
         
     def setup_watcher(self):
         """Set up the file watcher to monitor Python files."""
-        # Add directories to watch for new files
         for dir_path in self.dirs_to_monitor:
             if os.path.exists(dir_path):
                 self.watcher.addPath(dir_path)
-                # Also add all Python files in this directory
+
                 self._add_directory_files(dir_path)
                 
     def _add_directory_files(self, directory):
         """Add all Python files in the directory and its subdirectories to the watcher."""
         for root, dirs, files in os.walk(directory):
-            # Add subdirectories to watch
             for d in dirs:
                 dir_path = os.path.join(root, d)
                 try:
                     self.watcher.addPath(dir_path)
                 except Exception:
-                    pass  # Skip if directory can't be watched
+                    pass
                 
-            # Add Python files to watch
             for file in files:
                 if file.endswith('.py') and '__pycache__' not in root:
                     file_path = os.path.join(root, file)
                     try:
                         self.watcher.addPath(file_path)
                         self.watched_files.append(file_path)
-                        # Store initial timestamp
                         self.file_timestamps[file_path] = os.path.getmtime(file_path)
                     except Exception:
-                        pass  # Skip if file can't be watched
+                        pass 
         
     def start(self):
         """Start monitoring for file changes."""
-        # Connect signals to slots
         self.watcher.fileChanged.connect(self.on_file_changed)
         self.watcher.directoryChanged.connect(self.on_directory_changed)
-        # Start backup timer
         self.check_timer.start()
         print("Hot reload monitoring started")
         
     def stop(self):
         """Stop monitoring for file changes."""
-        # Disconnect signals
+
         try:
             self.watcher.fileChanged.disconnect(self.on_file_changed)
             self.watcher.directoryChanged.disconnect(self.on_directory_changed)
         except Exception:
-            pass  # Ignore disconnection errors
-        # Stop timer
+            pass 
         self.check_timer.stop()
         print("Hot reload monitoring stopped")
         
@@ -96,13 +89,11 @@ class FileChangeMonitor:
         """Periodically check for file changes that might have been missed by the watcher."""
         for file_path in list(self.watched_files):
             if not os.path.exists(file_path):
-                # File deleted
                 self.watched_files.remove(file_path)
                 self.file_timestamps.pop(file_path, None)
                 continue
                 
             try:
-                # Check if file was modified
                 current_mtime = os.path.getmtime(file_path)
                 if file_path in self.file_timestamps:
                     if current_mtime > self.file_timestamps[file_path]:
@@ -112,9 +103,8 @@ class FileChangeMonitor:
                 else:
                     self.file_timestamps[file_path] = current_mtime
             except Exception:
-                pass  # Skip if can't check file
+                pass 
                 
-        # Also check for new files
         for dir_path in self.dirs_to_monitor:
             if os.path.exists(dir_path):
                 self._add_directory_files(dir_path)
@@ -123,11 +113,9 @@ class FileChangeMonitor:
         """Handle file change events."""
         if path.endswith('.py') and '__pycache__' not in path:
             print(f"Watcher detected change in: {path}")
-            # Update timestamp
             try:
                 if os.path.exists(path):
                     self.file_timestamps[path] = os.path.getmtime(path)
-                    # Re-add the path as it gets removed when modified
                     self.watcher.addPath(path)
             except Exception:
                 pass
@@ -135,31 +123,26 @@ class FileChangeMonitor:
             
     def on_directory_changed(self, path):
         """Handle directory change events."""
-        # Re-scan directory for new files
         self._add_directory_files(path)
         
     def reload_module(self, file_path):
         """Reload the Python module."""
         try:
-            # Convert file path to module path
             rel_path = os.path.relpath(file_path)
             mod_path = rel_path.replace('\\', '/').replace('/', '.')
             if mod_path.endswith('.py'):
                 mod_path = mod_path[:-3]
                 
-            # Extract the module name
             module_parts = mod_path.split('.')
             if 'src' in module_parts:
                 src_index = module_parts.index('src')
                 module_path = '.'.join(module_parts[src_index:])
                 
-                # Try to reload the module
                 try:
                     module = importlib.import_module(module_path)
                     importlib.reload(module)
                     print(f"Reloaded module: {module_path}")
                     
-                    # Tell the app to refresh its UI
                     QTimer.singleShot(100, self.app.refresh_after_hot_reload)
                 except (ImportError, AttributeError) as e:
                     print(f"Error reloading module {module_path}: {e}")
@@ -168,9 +151,10 @@ class FileChangeMonitor:
 
 class TodoApp(QMainWindow):
     """Main application window."""
-    def __init__(self, calendar_manager):
+    def __init__(self, calendar_manager, task_manager=None):
         super().__init__()
         self.calendar_manager = calendar_manager
+        self.task_manager = task_manager
         
         self.setWindowTitle("To-Do List")
         self.resize(*DEFAULT_WINDOW_SIZE)
@@ -195,7 +179,6 @@ class TodoApp(QMainWindow):
         self.reminder_manager = ReminderManager(self)
         self.reminder_manager.reminderReady.connect(self.show_reminder)
         
-        # Initialize the hot reload system
         try:
             self.file_monitor = FileChangeMonitor(self)
             self.file_monitor.start()
@@ -256,10 +239,10 @@ class TodoApp(QMainWindow):
         self.view_toggle_button.setFixedWidth(120)
         button_layout.addWidget(self.view_toggle_button)
         
-        add_button = QPushButton("Add Task")
-        add_button.clicked.connect(lambda: self.open_task_dialog())
-        add_button.setFixedWidth(100)
-        button_layout.addWidget(add_button)
+        self.new_task_btn = QPushButton("+ Add Task")
+        self.new_task_btn.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+        self.new_task_btn.clicked.connect(self.show_add_task_dialog)
+        button_layout.addWidget(self.new_task_btn)
         
         nav_layout.addWidget(button_container)
         
@@ -299,7 +282,11 @@ class TodoApp(QMainWindow):
             else:
                 self._update_current_view()
                 
-            
+        elif task_type == "fetch_tasks":
+            tasks, _ = result
+            if tasks:
+                self._process_loaded_events(tasks)
+                self._update_current_view()
                 
         elif task_type == "background_fetch":
             events, next_token = result
@@ -338,6 +325,10 @@ class TodoApp(QMainWindow):
         """Handle errors from worker thread."""
         if task_type == "fetch_events":
             self.show_alert(f"Error fetching events: {str(error)}", duration=4000)
+            self._update_current_view()
+            
+        elif task_type == "fetch_tasks":
+            self.show_alert(f"Error fetching tasks: {str(error)}", duration=4000)
             self._update_current_view()
             
         elif task_type in ["create_task", "update_task"]:
@@ -379,6 +370,14 @@ class TodoApp(QMainWindow):
             max_results=50,
             start_date=start_date
         )
+        
+        if self.task_manager:
+            self.worker.add_task(
+                "fetch_tasks",
+                self.task_manager.fetch_tasks,
+                tasklist_id='@default',
+                max_results=50
+            )
 
     def _fetch_next_page(self, page_token):
         """Fetch the next page of events."""
@@ -543,7 +542,17 @@ class TodoApp(QMainWindow):
         tasks_layout.setContentsMargins(PADDING, 0, 0, 0)
         tasks_layout.setSpacing(PADDING//2)
         
-        for task in tasks:
+        def sort_key(task):
+            if hasattr(task, 'source') and task.source == 'tasks':
+                return (2, task.start_dt)  # Google Tasks last
+            elif hasattr(task, 'isAllDay') and task.isAllDay:
+                return (1, task.start_dt)  # All-day events second
+            else:
+                return (0, task.start_dt)  # Regular events first
+                
+        sorted_tasks = sorted(tasks, key=sort_key)
+        
+        for task in sorted_tasks:
             task_card = self.create_task_card(task, False)
             tasks_layout.addWidget(task_card)
             
@@ -597,7 +606,15 @@ class TodoApp(QMainWindow):
             card_layout.setContentsMargins(10, 10, 10, 10)
             card_layout.setSpacing(4)
         
-        time_str = format_task_time(task.start_dt, task.end_dt)
+        is_all_day = hasattr(task, 'isAllDay') and task.isAllDay
+        is_google_task = hasattr(task, 'source') and task.source == 'tasks'
+        
+        if is_google_task:
+            time_str = "Task"
+        elif is_all_day:
+            time_str = "All day"
+        else:
+            time_str = format_task_time(task.start_dt, task.end_dt)
         
         summary = task.summary
         if is_monthly_view and len(summary) > 15:
@@ -609,7 +626,11 @@ class TodoApp(QMainWindow):
             local_start = task.start_dt.astimezone()
             bullet_color = "#50A0FF"
             
-            if local_start.hour < 12:
+            if is_google_task:
+                bullet_color = "#FFAA50"
+            elif is_all_day:
+                bullet_color = "#FFCC50"
+            elif local_start.hour < 12:
                 bullet_color = "#60C060"
             elif local_start.hour >= 17:
                 bullet_color = "#FF8050"
@@ -619,8 +640,8 @@ class TodoApp(QMainWindow):
             bullet_label.setFixedWidth(15)
             card_layout.addWidget(bullet_label)
             
-            start_time = format_datetime(local_start, 'time', include_minutes=False)
-            time_label = QLabel(start_time)
+            time_text = "Task" if is_google_task else "All day" if is_all_day else format_datetime(local_start, 'time', include_minutes=False)
+            time_label = QLabel(time_text)
             time_label.setStyleSheet(f"color: {bullet_color}; background: transparent; border: none;")
             time_label.setFont(QFont(FONT_SMALL, FONT_SMALL_SIZE - 2))
             time_label.setFixedWidth(45)
@@ -685,66 +706,86 @@ class TodoApp(QMainWindow):
             self.build_daily_view(self.search_entry.text())
         QTimer.singleShot(100, self.scroll_to_today)
         
-    def open_task_dialog(self, task=None):
-        """Open dialog to create or edit a task."""
-        dialog = TaskDialog(self, self.on_task_dialog_confirm, task)
+    def show_add_task_dialog(self):
+        """Show dialog to add a new task with option to select destination service."""
+        from src.ui.task_dialog import TaskDialog
+        dialog = TaskDialog(self, on_confirm=self.on_task_dialog_confirm)
         dialog.exec()
         
-    def open_task_dialog_for_date(self, date):
-        """Open task dialog pre-set for a specific date."""
-        local_tz = datetime.now().astimezone().tzinfo
-        now = datetime.now()
-        
-        if now.minute > 0 or now.second > 0:
-            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_hour = now
-            
-        start_dt = datetime.combine(date, next_hour.time())
-        start_dt = start_dt.replace(tzinfo=local_tz)
-        start_dt_utc = start_dt.astimezone(timezone.utc)
-        
-        end_dt_utc = start_dt_utc + timedelta(hours=1)
-
-        temp_task = Task("", start_dt_utc, end_dt_utc)
-        self.open_task_dialog(temp_task)
+    def open_task_dialog(self, task=None):
+        """Open the task dialog for editing an existing task."""
+        from src.ui.task_dialog import TaskDialog
+        dialog = TaskDialog(self, on_confirm=self.on_task_dialog_confirm, task=task)
+        dialog.exec()
         
     def on_task_dialog_confirm(self, task):
         """Handle confirmed task from dialog."""
-        event = {
-            'summary': task.summary,
-            'start': {'dateTime': format_iso_for_api(task.start_dt), 'timeZone': 'UTC'},
-            'end': {'dateTime': format_iso_for_api(task.end_dt), 'timeZone': 'UTC'}
-        }
-        
-        if task.task_id:
-            self.worker.add_task(
-                "update_task",
-                self.calendar_manager.update_event,
-                calendar_id='primary',
-                event_id=task.task_id,
-                updated_event=event
-            )
+        if (task.task_id and hasattr(task, 'source') and task.source == 'tasks') or \
+           (not task.task_id and hasattr(task, 'source') and task.source == 'tasks'):
+            if self.task_manager:
+                if task.task_id:
+                    self.worker.add_task(
+                        "update_task",
+                        self.task_manager.update_task,
+                        tasklist_id='@default',
+                        task_id=task.task_id,
+                        updated_task=task
+                    )
+                else:
+                    self.worker.add_task(
+                        "create_task",
+                        self.task_manager.add_task,
+                        tasklist_id='@default',
+                        task=task
+                    )
+            else:
+                self.show_alert("Cannot manage task: Task manager not available", duration=3000)
         else:
-            self.worker.add_task(
-                "create_task",
-                self.calendar_manager.add_event,
-                calendar_id='primary',
-                event=event
-            )
+            event = {
+                'summary': task.summary,
+                'start': {'dateTime': format_iso_for_api(task.start_dt), 'timeZone': 'UTC'},
+                'end': {'dateTime': format_iso_for_api(task.end_dt), 'timeZone': 'UTC'}
+            }
             
+            if task.task_id:
+                self.worker.add_task(
+                    "update_task",
+                    self.calendar_manager.update_event,
+                    calendar_id='primary',
+                    event_id=task.task_id,
+                    updated_event=event
+                )
+            else:
+                self.worker.add_task(
+                    "create_task",
+                    self.calendar_manager.add_event,
+                    calendar_id='primary',
+                    event=event
+                )
+                
     def delete_task(self, task):
-        """Delete a task from the calendar."""
+        """Delete a task from the calendar or tasks API."""
         if not task or not task.task_id:
             self.show_alert("Cannot delete task: no task ID", duration=3000)
             return
-            
-        self.worker.add_task(
-            "delete_task",
-            self.calendar_manager.delete_event,
-            calendar_id='primary',
-            event_id=task.task_id
-        )
+        
+        if hasattr(task, 'source') and task.source == 'tasks':
+            if self.task_manager:
+                self.worker.add_task(
+                    "delete_task",
+                    self.task_manager.delete_task,
+                    tasklist_id='@default',
+                    task_id=task.task_id
+                )
+            else:
+                self.show_alert("Cannot delete task: Task manager not available", duration=3000)
+        else:
+            self.worker.add_task(
+                "delete_task",
+                self.calendar_manager.delete_event,
+                calendar_id='primary',
+                event_id=task.task_id
+            )
 
     def _create_monthly_view_structure(self):
         """Create the static widgets for the monthly view."""
@@ -892,6 +933,12 @@ class TodoApp(QMainWindow):
                 start_date=start_date,
                 end_date=end_date
             )
+            
+            if self.task_manager:
+                self.worker.add_task(
+                    "fetch_tasks",
+                    self.task_manager.fetch_tasks
+                )
         
         holidays = self.calendar_manager.cache.get_holidays_for_month(self.displayed_year, self.displayed_month)
         if not holidays or force_refresh:
@@ -1030,7 +1077,15 @@ class TodoApp(QMainWindow):
                 layout.addWidget(frame)
                 
             if tasks:
-                sorted_tasks = sorted(tasks, key=lambda t: t.start_dt)
+                def sort_key(task):
+                    if hasattr(task, 'source') and task.source == 'tasks':
+                        return (2, task.start_dt)
+                    elif hasattr(task, 'isAllDay') and task.isAllDay:
+                        return (1, task.start_dt)
+                    else:
+                        return (0, task.start_dt)
+                
+                sorted_tasks = sorted(tasks, key=sort_key)
             
                 layout.setSpacing(1)
                 
@@ -1093,7 +1148,7 @@ class TodoApp(QMainWindow):
                 self.prev_month()
             event.accept()
         else:
-            # Let parent class handle wheel events for daily view
+
             super().wheelEvent(event)
         
     def closeEvent(self, event):
@@ -1136,40 +1191,32 @@ class TodoApp(QMainWindow):
         """Refresh the UI after a hot reload has occurred."""
         self.show_alert("Hot reload detected, refreshing UI...", duration=2000)
         
-        # Store current state before refresh
         current_search = self.search_entry.text() if hasattr(self, 'search_entry') else ""
         current_view = self.current_view
         
-        # Clear and rebuild UI completely
         self.clear_widget(self.centralWidget())
         
-        # Reinitialize UI
         main_layout = QVBoxLayout(self.centralWidget())
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # Rebuild from scratch
         self.init_navbar(main_layout)
         self.init_main_content(main_layout)
         
-        # Restore state
         self.search_entry.setText(current_search)
         self.current_view = current_view
         
-        # Restore view state
         if self.current_view == "daily":
             self.view_toggle_button.setText("Monthly View")
             self.views_stack.setCurrentIndex(0)
             self.build_daily_view(current_search)
-        else:  # monthly view
+        else:
             self.view_toggle_button.setText("Daily View")
             self.views_stack.setCurrentIndex(1)
             if not self.monthly_view.layout().count():
                 self._create_monthly_view_structure()
             self._update_monthly_view_data(current_search, force_refresh=True)
             
-        # Force refresh the events from the API
         self.refresh_events()
         
-        # Apply all pending events to ensure UI is updated immediately
         QTimer.singleShot(100, self.scroll_to_today)

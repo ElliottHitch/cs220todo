@@ -14,7 +14,7 @@ class AuthManager:
     def __init__(self):
         """Initialize the authentication manager."""
         self.creds = None
-        self.refresh_buffer = 300  # 5 minutes buffer
+        self.refresh_buffer = 300
         self.service = None
         self.load_credentials()
         
@@ -26,7 +26,6 @@ class AuthManager:
                 SCOPES
             )
             
-        # If credentials don't exist or are invalid, refresh them
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
@@ -35,7 +34,6 @@ class AuthManager:
                     CREDENTIALS_FILE, SCOPES)
                 self.creds = flow.run_local_server(port=0)
             
-            # Save the credentials for the next run
             with open(TOKEN_FILE, 'w') as token:
                 token.write(self.creds.to_json())
                 
@@ -47,7 +45,6 @@ class AuthManager:
         """Refresh the credentials if they are expired."""
         if self.creds and self.creds.expired and self.creds.refresh_token:
             self.creds.refresh(Request())
-            # Save the refreshed credentials
             with open(TOKEN_FILE, 'w') as token:
                 token.write(self.creds.to_json())
             self.service = None
@@ -99,3 +96,8 @@ class AuthManager:
         from googleapiclient.discovery import build
         self.service = build('calendar', 'v3', credentials=self.creds)
         return self.service 
+
+    def get_tasks_service(self):
+        """Get an authenticated tasks service instance."""
+        from googleapiclient.discovery import build
+        return build('tasks', 'v1', credentials=self.creds) 

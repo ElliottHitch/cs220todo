@@ -83,6 +83,22 @@ class TaskDialog(QDialog):
             self.summary_edit.setText(self.task.summary)
         main_layout.addWidget(self.summary_edit)
         
+        # Add service selection for new tasks
+        if not self.task:
+            service_frame = QFrame()
+            service_layout = QHBoxLayout(service_frame)
+            
+            service_label = QLabel("Save as:")
+            service_label.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+            service_layout.addWidget(service_label)
+            
+            self.service_type = QComboBox()
+            self.service_type.addItems(["Calendar Event", "Task"])
+            self.service_type.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
+            service_layout.addWidget(self.service_type)
+            
+            main_layout.addWidget(service_frame)
+        
         self.calendar = QCalendarWidget()
         self.calendar.setGridVisible(True)
         self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
@@ -269,7 +285,9 @@ class TaskDialog(QDialog):
             self.task.start_dt = start_dt
             self.task.end_dt = end_dt
         else:
-            self.task = Task(summary, start_dt, end_dt)
+            # Determine if this should be a task or calendar event
+            source = 'tasks' if hasattr(self, 'service_type') and self.service_type.currentText() == "Task" else 'calendar'
+            self.task = Task(summary, start_dt, end_dt, source=source)
             
         if self.on_confirm:
             self.on_confirm(self.task)

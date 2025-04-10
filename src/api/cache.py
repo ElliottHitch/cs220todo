@@ -149,7 +149,14 @@ class CacheManager:
         try:
             start_dt = parse_event_datetime(event, field='start')
             end_dt = parse_event_datetime(event, field='end')
-            return Task(event['summary'], start_dt, end_dt, task_id=event.get('id'))
+            source = event.get('source', 'calendar')
+            isAllDay = event.get('isAllDay', False)
+            
+            # Check if it's a date-only event (which indicates an all-day event)
+            if 'date' in event.get('start', {}) and 'date' in event.get('end', {}):
+                isAllDay = True
+                
+            return Task(event['summary'], start_dt, end_dt, task_id=event.get('id'), source=source, isAllDay=isAllDay)
         except Exception as e:
             print(f"Error converting event to task: {str(e)}")
             return None 

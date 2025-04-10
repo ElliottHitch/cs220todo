@@ -5,7 +5,7 @@ import os
 calendar.setfirstweekday(6)
 
 # API Configuration
-SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/tasks']
 TOKEN_FILE = os.path.join('config', 'token.json')
 CREDENTIALS_FILE = os.path.join('config', 'credentials.json')
 DEFAULT_CALENDAR_ID = 'primary'
