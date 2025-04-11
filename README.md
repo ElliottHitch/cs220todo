@@ -30,7 +30,7 @@ You need to set up Google Calendar API credentials:
 2. Create a new project
 3. Enable the Google Calendar API for your project
 4. Create OAuth 2.0 credentials (Desktop application type)
-5. Download the credentials JSON file and save it as `credentials.json` in the root folder of this project
+5. Download the credentials JSON file and save it as `credentials.json` in the `config` folder of this project
 
 
 ### 4. Run the application
@@ -38,7 +38,7 @@ You need to set up Google Calendar API credentials:
 python main.py
 ```
 
-The first time you run the application, it will open a browser window for Google authentication. After authenticating, a `token.json` file will be created automatically to store your access tokens.
+The first time you run the application, it will open a browser window for Google authentication. After authenticating, a `token.json` file will be created automatically in the `config` folder to store your access tokens.
 
 ### 5. Using the application
 

@@ -15,7 +15,7 @@ build/
 
 # Sensitive files
 config/credentials.json
-token.json
+config/token.json
 *.key
 .env
 
