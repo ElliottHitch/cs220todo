@@ -83,7 +83,6 @@ class TaskDialog(QDialog):
             self.summary_edit.setText(self.task.summary)
         main_layout.addWidget(self.summary_edit)
         
-        # Add service selection for new tasks
         if not self.task:
             service_frame = QFrame()
             service_layout = QHBoxLayout(service_frame)
@@ -285,7 +284,6 @@ class TaskDialog(QDialog):
             self.task.start_dt = start_dt
             self.task.end_dt = end_dt
         else:
-            # Determine if this should be a task or calendar event
             source = 'tasks' if hasattr(self, 'service_type') and self.service_type.currentText() == "Task" else 'calendar'
             self.task = Task(summary, start_dt, end_dt, source=source)
             

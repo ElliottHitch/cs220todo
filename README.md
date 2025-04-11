@@ -35,7 +35,7 @@ You need to set up Google Calendar API credentials:
 
 ### 4. Run the application
 ```
-python todolist.py
+python main.py
 ```
 
 The first time you run the application, it will open a browser window for Google authentication. After authenticating, a `token.json` file will be created automatically to store your access tokens.

@@ -16,6 +16,44 @@ class TaskManager:
         self.fetch_lock = threading.Lock()
         self.fetching_ranges = set()
         
+    def _create_event_like_structure(self, task_id, title, due_datetime=None, completed=False, is_all_day=False):
+        """Helper method to create a standardized event-like structure from a task.
+        
+        Args:
+            task_id: ID of the task
+            title: Title/summary of the task
+            due_datetime: Due datetime, or None if not specified
+            completed: Whether the task is completed
+            is_all_day: Whether it should be treated as an all-day event
+            
+        Returns:
+            A dictionary with event-like structure
+        """
+        if due_datetime is None:
+            due_datetime = datetime.datetime.now(datetime.timezone.utc)
+            
+        # If all-day, set to 9 AM
+        if is_all_day:
+            morning_dt = datetime.datetime.combine(
+                due_datetime.date(), 
+                datetime.time(9, 0, 0, tzinfo=datetime.timezone.utc)
+            )
+            start_time = morning_dt
+        else:
+            start_time = due_datetime
+            
+        end_time = start_time + datetime.timedelta(hours=1)
+        
+        return {
+            'id': task_id or generate_id(),
+            'summary': title or 'Untitled Task',
+            'status': 'completed' if completed else 'needs_action',
+            'start': {'dateTime': start_time.isoformat()},
+            'end': {'dateTime': end_time.isoformat()},
+            'source': 'tasks',
+            'isAllDay': is_all_day
+        }
+        
     def fetch_tasks(self, tasklist_id='@default', max_results=API_MAX_RESULTS):
         """Fetch tasks from Google Tasks API."""
         self._ensure_valid_token()
@@ -40,48 +78,21 @@ class TaskManager:
                 if not task.get('title'):
                     continue
 
-                start_date = None
+                due_datetime = None
+                is_all_day = False
+                
                 if task.get('due'):
-
                     raw_due = task['due'].replace('Z', '+00:00')
                     due_datetime = datetime.datetime.fromisoformat(raw_due)
-                    
-                    is_midnight = due_datetime.hour == 0 and due_datetime.minute == 0 and due_datetime.second == 0
-                    
-                    if is_midnight:
-
-                        morning_dt = datetime.datetime.combine(
-                            due_datetime.date(), 
-                            datetime.time(9, 0, 0, tzinfo=datetime.timezone.utc)
-                        )
-                        event_like = {
-                            'id': task.get('id', generate_id()),
-                            'summary': task.get('title', 'Untitled Task'),
-                            'status': 'completed' if task.get('completed') else 'needs_action',
-                            'start': {'dateTime': morning_dt.isoformat()},
-                            'end': {'dateTime': (morning_dt + datetime.timedelta(hours=1)).isoformat()},
-                            'source': 'tasks',
-                            'isAllDay': True
-                        }
-                    else:
-                        event_like = {
-                            'id': task.get('id', generate_id()),
-                            'summary': task.get('title', 'Untitled Task'),
-                            'status': 'completed' if task.get('completed') else 'needs_action',
-                            'start': {'dateTime': due_datetime.isoformat()},
-                            'end': {'dateTime': (due_datetime + datetime.timedelta(hours=1)).isoformat()},
-                            'source': 'tasks'
-                        }
-                else:
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    event_like = {
-                        'id': task.get('id', generate_id()),
-                        'summary': task.get('title', 'Untitled Task'),
-                        'status': 'completed' if task.get('completed') else 'needs_action',
-                        'start': {'dateTime': now.isoformat()},
-                        'end': {'dateTime': (now + datetime.timedelta(hours=1)).isoformat()},
-                        'source': 'tasks'
-                    }
+                    is_all_day = due_datetime.hour == 0 and due_datetime.minute == 0 and due_datetime.second == 0
+                
+                event_like = self._create_event_like_structure(
+                    task_id=task.get('id'),
+                    title=task.get('title'),
+                    due_datetime=due_datetime,
+                    completed=task.get('completed'),
+                    is_all_day=is_all_day
+                )
                 processed_tasks.append(event_like)
                 
             return processed_tasks, None
@@ -92,9 +103,8 @@ class TaskManager:
     def _ensure_valid_token(self):
         """Ensure the token is valid before making API calls."""
         try:
-            refreshed = self.auth_service.auto_refresh_token()
-            if refreshed:
-                self.service = self.auth_service.get_tasks_service()
+            self.auth_service.refresh_token_if_needed()
+            self.service = self.auth_service.get_tasks_service()
         except Exception as e:
             print(f"Error ensuring valid token: {str(e)}")
 
@@ -116,20 +126,13 @@ class TaskManager:
                 body=task_body
             ).execute()
             
-            morning_dt = datetime.datetime.combine(
-                task.start_dt.date(), 
-                datetime.time(9, 0, 0, tzinfo=datetime.timezone.utc)
+            event_like = self._create_event_like_structure(
+                task_id=result.get('id'),
+                title=result.get('title'),
+                due_datetime=task.start_dt,
+                completed=False,
+                is_all_day=True
             )
-            
-            event_like = {
-                'id': result.get('id', generate_id()),
-                'summary': result.get('title', 'Untitled Task'),
-                'status': 'completed' if result.get('completed') else 'needs_action',
-                'start': {'dateTime': morning_dt.isoformat()},
-                'end': {'dateTime': (morning_dt + datetime.timedelta(hours=1)).isoformat()},
-                'source': 'tasks',
-                'isAllDay': True
-            }
             
             self.cache.add_event(event_like)
             return event_like
@@ -155,20 +158,13 @@ class TaskManager:
                 body=task_body
             ).execute()
             
-            morning_dt = datetime.datetime.combine(
-                updated_task.start_dt.date(), 
-                datetime.time(9, 0, 0, tzinfo=datetime.timezone.utc)
+            event_like = self._create_event_like_structure(
+                task_id=result.get('id'),
+                title=result.get('title'),
+                due_datetime=updated_task.start_dt,
+                completed=result.get('completed'),
+                is_all_day=True
             )
-            
-            event_like = {
-                'id': result.get('id', generate_id()),
-                'summary': result.get('title', 'Untitled Task'),
-                'status': 'completed' if result.get('completed') else 'needs_action',
-                'start': {'dateTime': morning_dt.isoformat()},
-                'end': {'dateTime': (morning_dt + datetime.timedelta(hours=1)).isoformat()},
-                'source': 'tasks',
-                'isAllDay': True
-            }
             
             self.cache.add_event(event_like)
             return event_like

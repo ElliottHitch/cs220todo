@@ -1,6 +1,5 @@
 import sys
 from PyQt6.QtWidgets import QApplication
-from src.core.config import SCOPES
 from src.api.auth import AuthManager
 from src.api.calendar import CalendarManager
 from src.api.tasks import TaskManager
@@ -16,7 +15,7 @@ def main():
     # Create and start the application
     app = QApplication(sys.argv)
     
-    # Set style to fusion for better cross-platform appearance
+    # Set style to fusion for better appearance
     app.setStyle("Fusion")
     
     # Create and show main window

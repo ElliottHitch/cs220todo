@@ -53,14 +53,31 @@ class CalendarManager:
             print(f"Error fetching events: {str(e)}")
             return [], None
     
-    def get_events_for_month(self, year, month, calendar_id=DEFAULT_CALENDAR_ID):
-        """Get all events for a specific month."""
+    def _get_month_date_range(self, year, month):
+        """Calculate start and end dates for a given month."""
         start_date = datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc)
         if month == 12:
             end_date = datetime.datetime(year + 1, 1, 1, tzinfo=datetime.timezone.utc) - datetime.timedelta(seconds=1)
         else:
             end_date = datetime.datetime(year, month + 1, 1, tzinfo=datetime.timezone.utc) - datetime.timedelta(seconds=1)
-        return self.fetch_events(start_date, end_date, calendar_id)
+        return start_date, end_date
+    
+    def get_events_for_month(self, year, month, calendar_id=DEFAULT_CALENDAR_ID):
+        """Get all events for a specific month with caching support."""
+        start_date, end_date = self._get_month_date_range(year, month)
+        return self.fetch_events_for_range(start_date, end_date, calendar_id)
+    
+    def get_events_for_month_with_pagination(self, year, month, calendar_id=DEFAULT_CALENDAR_ID, max_results=API_MAX_RESULTS, page_token=None):
+        """Get events for a specific month with pagination support.
+        Returns tuple of (events, next_page_token)."""
+        start_date, end_date = self._get_month_date_range(year, month)
+        return self.fetch_events(
+            calendar_id=calendar_id,
+            max_results=max_results,
+            page_token=page_token,
+            start_date=start_date,
+            end_date=end_date
+        )
     
     def get_event(self, event_id, calendar_id=DEFAULT_CALENDAR_ID):
         """Get a single event by ID from the API."""
@@ -74,9 +91,8 @@ class CalendarManager:
     def _ensure_valid_token(self):
         """Ensure the token is valid before making API calls."""
         try:
-            refreshed = self.auth_service.auto_refresh_token()
-            if refreshed:
-                self.service = self.auth_service.get_calendar_service()
+            self.auth_service.refresh_token_if_needed()
+            self.service = self.auth_service.get_calendar_service()
         except Exception as e:
             print(f"Error ensuring valid token: {str(e)}")
 
@@ -114,9 +130,7 @@ class CalendarManager:
             
             for month_key in uncached_months:
                 year, month = month_key
-                month_start = datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc)
-                month_end = (datetime.datetime(year + 1, 1, 1, tzinfo=datetime.timezone.utc) if month == 12 
-                            else datetime.datetime(year, month + 1, 1, tzinfo=datetime.timezone.utc)) - datetime.timedelta(seconds=1)
+                month_start, month_end = self._get_month_date_range(year, month)
                 
                 fetch_start = max(month_start, start_date)
                 fetch_end = min(month_end, end_date)
@@ -233,11 +247,7 @@ class CalendarManager:
         try:
             holiday_calendar_id = 'en.usa#holiday@group.v.calendar.google.com'
             
-            start_date = datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc)
-            if month == 12:
-                end_date = datetime.datetime(year + 1, 1, 1, tzinfo=datetime.timezone.utc) - datetime.timedelta(days=1)
-            else:
-                end_date = datetime.datetime(year, month + 1, 1, tzinfo=datetime.timezone.utc) - datetime.timedelta(days=1)
+            start_date, end_date = self._get_month_date_range(year, month)
             end_date = datetime.datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=datetime.timezone.utc)
             
             time_min = format_iso_for_api(start_date)

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QFrame, QScrollArea, QCalendarWidget, QComboBox, 
     QSpinBox, QStackedWidget, QGridLayout, QMessageBox
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, QDate, pyqtSignal, QFileSystemWatcher
+from PyQt6.QtCore import Qt, QSize, QTimer, QDate, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from src.core.config import (
     DEFAULT_WINDOW_SIZE, MAIN_STYLE, BACKGROUND_COLOR, HIGHLIGHT_COLOR, CARD_COLOR,
@@ -21,133 +21,6 @@ from src.ui.task_dialog import TaskDialog
 from src.ui.reminder_manager import ReminderManager
 from src.workers.api_worker import APIWorker
 from src.core.models import Task
-
-import os
-import importlib
-
-class FileChangeMonitor:
-    """Monitor file changes using PyQt6's QFileSystemWatcher for hot reloading."""
-    
-    def __init__(self, app, dirs_to_monitor=None):
-        self.app = app
-        self.dirs_to_monitor = dirs_to_monitor or ['src']
-        self.watcher = QFileSystemWatcher()
-        self.watched_files = []
-        self.file_timestamps = {}
-        self.check_timer = QTimer()
-        self.check_timer.setInterval(1000)
-        self.check_timer.timeout.connect(self.check_for_changes)
-        self.setup_watcher()
-        
-    def setup_watcher(self):
-        """Set up the file watcher to monitor Python files."""
-        for dir_path in self.dirs_to_monitor:
-            if os.path.exists(dir_path):
-                self.watcher.addPath(dir_path)
-
-                self._add_directory_files(dir_path)
-                
-    def _add_directory_files(self, directory):
-        """Add all Python files in the directory and its subdirectories to the watcher."""
-        for root, dirs, files in os.walk(directory):
-            for d in dirs:
-                dir_path = os.path.join(root, d)
-                try:
-                    self.watcher.addPath(dir_path)
-                except Exception:
-                    pass
-                
-            for file in files:
-                if file.endswith('.py') and '__pycache__' not in root:
-                    file_path = os.path.join(root, file)
-                    try:
-                        self.watcher.addPath(file_path)
-                        self.watched_files.append(file_path)
-                        self.file_timestamps[file_path] = os.path.getmtime(file_path)
-                    except Exception:
-                        pass 
-        
-    def start(self):
-        """Start monitoring for file changes."""
-        self.watcher.fileChanged.connect(self.on_file_changed)
-        self.watcher.directoryChanged.connect(self.on_directory_changed)
-        self.check_timer.start()
-        print("Hot reload monitoring started")
-        
-    def stop(self):
-        """Stop monitoring for file changes."""
-
-        try:
-            self.watcher.fileChanged.disconnect(self.on_file_changed)
-            self.watcher.directoryChanged.disconnect(self.on_directory_changed)
-        except Exception:
-            pass 
-        self.check_timer.stop()
-        print("Hot reload monitoring stopped")
-        
-    def check_for_changes(self):
-        """Periodically check for file changes that might have been missed by the watcher."""
-        for file_path in list(self.watched_files):
-            if not os.path.exists(file_path):
-                self.watched_files.remove(file_path)
-                self.file_timestamps.pop(file_path, None)
-                continue
-                
-            try:
-                current_mtime = os.path.getmtime(file_path)
-                if file_path in self.file_timestamps:
-                    if current_mtime > self.file_timestamps[file_path]:
-                        print(f"Timer detected change in: {file_path}")
-                        self.file_timestamps[file_path] = current_mtime
-                        self.reload_module(file_path)
-                else:
-                    self.file_timestamps[file_path] = current_mtime
-            except Exception:
-                pass 
-                
-        for dir_path in self.dirs_to_monitor:
-            if os.path.exists(dir_path):
-                self._add_directory_files(dir_path)
-        
-    def on_file_changed(self, path):
-        """Handle file change events."""
-        if path.endswith('.py') and '__pycache__' not in path:
-            print(f"Watcher detected change in: {path}")
-            try:
-                if os.path.exists(path):
-                    self.file_timestamps[path] = os.path.getmtime(path)
-                    self.watcher.addPath(path)
-            except Exception:
-                pass
-            self.reload_module(path)
-            
-    def on_directory_changed(self, path):
-        """Handle directory change events."""
-        self._add_directory_files(path)
-        
-    def reload_module(self, file_path):
-        """Reload the Python module."""
-        try:
-            rel_path = os.path.relpath(file_path)
-            mod_path = rel_path.replace('\\', '/').replace('/', '.')
-            if mod_path.endswith('.py'):
-                mod_path = mod_path[:-3]
-                
-            module_parts = mod_path.split('.')
-            if 'src' in module_parts:
-                src_index = module_parts.index('src')
-                module_path = '.'.join(module_parts[src_index:])
-                
-                try:
-                    module = importlib.import_module(module_path)
-                    importlib.reload(module)
-                    print(f"Reloaded module: {module_path}")
-                    
-                    QTimer.singleShot(100, self.app.refresh_after_hot_reload)
-                except (ImportError, AttributeError) as e:
-                    print(f"Error reloading module {module_path}: {e}")
-        except Exception as e:
-            print(f"Error during hot reload: {e}")
 
 class TodoApp(QMainWindow):
     """Main application window."""
@@ -178,13 +51,6 @@ class TodoApp(QMainWindow):
         
         self.reminder_manager = ReminderManager(self)
         self.reminder_manager.reminderReady.connect(self.show_reminder)
-        
-        try:
-            self.file_monitor = FileChangeMonitor(self)
-            self.file_monitor.start()
-            print("Hot reloading enabled")
-        except Exception as e:
-            print(f"Warning: Could not enable hot reloading: {e}")
         
         self.refresh_events()
         
@@ -1191,14 +1057,18 @@ class TodoApp(QMainWindow):
             super().wheelEvent(event)
         
     def closeEvent(self, event):
-        """Handle window close event."""
-        if hasattr(self, 'worker'):
-            self.worker.stop()
-        
-        if hasattr(self, 'file_monitor'):
-            self.file_monitor.stop()
+        """Handle the window close event."""
+        try:
+            if self.task_manager:
+                self.task_manager.stop_notification_check()
             
-        event.accept()
+            if self.reminder_manager:
+                self.reminder_manager.stop()
+            
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+            
+        super().closeEvent(event)
         
     def scroll_to_today(self):
         """Scroll to the current day in either daily or monthly view."""
@@ -1225,37 +1095,3 @@ class TodoApp(QMainWindow):
                 self.displayed_year = today.year
                 self.displayed_month = today.month
                 self._update_monthly_view_data(self.search_entry.text())
-
-    def refresh_after_hot_reload(self):
-        """Refresh the UI after a hot reload has occurred."""
-        self.show_alert("Hot reload detected, refreshing UI...", duration=2000)
-        
-        current_search = self.search_entry.text() if hasattr(self, 'search_entry') else ""
-        current_view = self.current_view
-        
-        self.clear_widget(self.centralWidget())
-        
-        main_layout = QVBoxLayout(self.centralWidget())
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        self.init_navbar(main_layout)
-        self.init_main_content(main_layout)
-        
-        self.search_entry.setText(current_search)
-        self.current_view = current_view
-        
-        if self.current_view == "daily":
-            self.view_toggle_button.setText("Monthly View")
-            self.views_stack.setCurrentIndex(0)
-            self.build_daily_view(current_search)
-        else:
-            self.view_toggle_button.setText("Daily View")
-            self.views_stack.setCurrentIndex(1)
-            if not self.monthly_view.layout().count():
-                self._create_monthly_view_structure()
-            self._update_monthly_view_data(current_search, force_refresh=True)
-            
-        self.refresh_events()
-        
-        QTimer.singleShot(100, self.scroll_to_today)

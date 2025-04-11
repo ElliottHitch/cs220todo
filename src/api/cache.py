@@ -13,14 +13,15 @@ class CacheManager:
         self.cache_lock = threading.Lock()
         self.fetched_ranges = set()
         self.event_ids = set()
+        self.tasks_by_id = {} 
         
     def add_event(self, event):
         """Add or update an event in the cache."""
         with self.cache_lock:
-            self._add_event_no_lock(event)
+            self._add_event_internal(event)
     
-    def _add_event_no_lock(self, event):
-        """Add an event to the cache without acquiring the lock."""
+    def _add_event_internal(self, event):
+        """Internal method to add an event to the cache while holding the lock."""
         event_start = parse_event_datetime(event, field='start')
         month_key = (event_start.year, event_start.month)
         
@@ -35,7 +36,17 @@ class CacheManager:
             
         self.events_by_month[month_key].append(event)
         
-        task = self._convert_event_to_task(event)
+        if event_id and event_id not in self.tasks_by_id:
+            task = self._convert_event_to_task(event)
+            if task:
+                self.tasks_by_id[event_id] = task
+        elif event_id and event_id in self.tasks_by_id:
+            task = self._convert_event_to_task(event)
+            if task:
+                self.tasks_by_id[event_id] = task
+        else:
+            task = self._convert_event_to_task(event)
+        
         if task:
             if 'date' in event.get('start', {}):
                 local_date = datetime.fromisoformat(event['start']['date']).date()
@@ -57,7 +68,7 @@ class CacheManager:
             
         with self.cache_lock:
             for event in events:
-                self._add_event_no_lock(event)
+                self._add_event_internal(event)
     
     def delete_event(self, event_id):
         """Delete an event from all caches."""
@@ -68,6 +79,9 @@ class CacheManager:
             for date, tasks_list in list(self.tasks_by_date.items()):
                 self.tasks_by_date[date] = [t for t in tasks_list if getattr(t, 'task_id', None) != event_id]
             
+            if event_id in self.tasks_by_id:
+                del self.tasks_by_id[event_id]
+                
             self.event_ids.discard(event_id)
     
     def clear_month(self, year, month):
@@ -76,7 +90,10 @@ class CacheManager:
         with self.cache_lock:
             if month_key in self.events_by_month:
                 for event in self.events_by_month[month_key]:
-                    self.event_ids.discard(event.get('id'))
+                    event_id = event.get('id')
+                    self.event_ids.discard(event_id)
+                    if event_id in self.tasks_by_id:
+                        del self.tasks_by_id[event_id]
                 del self.events_by_month[month_key]
                 
             if month_key in self.holidays_by_month:
@@ -144,6 +161,11 @@ class CacheManager:
         with self.cache_lock:
             self.fetched_ranges.add(month_key)
     
+    def get_task_by_id(self, event_id):
+        """Get a task by its event ID."""
+        with self.cache_lock:
+            return self.tasks_by_id.get(event_id)
+    
     def _convert_event_to_task(self, event):
         """Convert a Google Calendar event to a Task object."""
         try:
@@ -152,7 +174,6 @@ class CacheManager:
             source = event.get('source', 'calendar')
             isAllDay = event.get('isAllDay', False)
             
-            # Check if it's a date-only event (which indicates an all-day event)
             if 'date' in event.get('start', {}) and 'date' in event.get('end', {}):
                 isAllDay = True
                 
