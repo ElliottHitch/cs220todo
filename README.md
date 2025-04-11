@@ -24,14 +24,7 @@ pip install -r requirements.txt
 
 ### 3. Google API Setup
 
-You need to set up Google Calendar API credentials:
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project
-3. Enable the Google Calendar API for your project
-4. Create OAuth 2.0 credentials (Desktop application type)
-5. Download the credentials JSON file and save it as `credentials.json` in the `config` folder of this project
-
+Place credentials.json in /config
 
 ### 4. Run the application
 ```
