@@ -24,9 +24,9 @@ pip install -r requirements.txt
 
 ### 3. Google API Setup
 
-'''
+```
 Place credentials.json in /config
-'''
+```
 
 ### 4. Run the application
 ```
