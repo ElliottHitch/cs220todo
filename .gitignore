@@ -14,7 +14,7 @@ build/
 *.egg-info/
 
 # Sensitive files
-credentials.json
+config/credentials.json
 token.json
 *.key
 .env
