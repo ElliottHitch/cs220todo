@@ -232,16 +232,31 @@ class TodoApp(QMainWindow):
         today_button = QPushButton("Today")
         today_button.clicked.connect(self.scroll_to_today)
         today_button.setFixedWidth(100)
+        today_button.setStyleSheet("""
+            QPushButton:hover {
+                background-color: #1F6AA5;
+            }
+        """)
         button_layout.addWidget(today_button)
         
         self.view_toggle_button = QPushButton("Monthly View")
         self.view_toggle_button.clicked.connect(self.toggle_view)
         self.view_toggle_button.setFixedWidth(120)
+        self.view_toggle_button.setStyleSheet("""
+            QPushButton:hover {
+                background-color: #1F6AA5;
+            }
+        """)
         button_layout.addWidget(self.view_toggle_button)
         
         self.new_task_btn = QPushButton("+ Add Task")
         self.new_task_btn.setFont(QFont(FONT_LABEL, FONT_LABEL_SIZE))
         self.new_task_btn.clicked.connect(self.show_add_task_dialog)
+        self.new_task_btn.setStyleSheet("""
+            QPushButton:hover {
+                background-color: #1F6AA5;
+            }
+        """)
         button_layout.addWidget(self.new_task_btn)
         
         nav_layout.addWidget(button_container)
@@ -718,6 +733,20 @@ class TodoApp(QMainWindow):
         dialog = TaskDialog(self, on_confirm=self.on_task_dialog_confirm, task=task)
         dialog.exec()
         
+    def open_task_dialog_for_date(self, date):
+        """Open the task dialog with the selected date pre-filled."""
+        from src.ui.task_dialog import TaskDialog
+        # Create a new task with the selected date
+        start_time = datetime.combine(date, datetime.min.time())
+        end_time = start_time + timedelta(hours=1)
+        task = Task(
+            summary="",
+            start_dt=start_time,
+            end_dt=end_time
+        )
+        dialog = TaskDialog(self, on_confirm=self.on_task_dialog_confirm, task=task)
+        dialog.exec()
+        
     def on_task_dialog_confirm(self, task):
         """Handle confirmed task from dialog."""
         if (task.task_id and hasattr(task, 'source') and task.source == 'tasks') or \
@@ -805,6 +834,11 @@ class TodoApp(QMainWindow):
         prev_button = QPushButton("<")
         prev_button.setFixedWidth(40)
         prev_button.clicked.connect(self.prev_month)
+        prev_button.setStyleSheet("""
+            QPushButton:hover {
+                background-color: #1F6AA5;
+            }
+        """)
         header_layout.addWidget(prev_button)
         
         month_date = datetime(self.displayed_year, self.displayed_month, 1)
@@ -816,6 +850,11 @@ class TodoApp(QMainWindow):
         next_button = QPushButton(">")
         next_button.setFixedWidth(40)
         next_button.clicked.connect(self.next_month)
+        next_button.setStyleSheet("""
+            QPushButton:hover {
+                background-color: #1F6AA5;
+            }
+        """)
         header_layout.addWidget(next_button)
         
         self.monthly_layout.addWidget(header_frame)
