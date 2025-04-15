@@ -1054,12 +1054,12 @@ class TodoApp(QMainWindow):
                 self.wheel_scroll_locked = True
                 self.next_month()
                 # Unlock the wheel scrolling after a delay (250ms)
-                QTimer.singleShot(250, self._unlock_wheel_scroll)
+                QTimer.singleShot(500, self._unlock_wheel_scroll)
             elif delta > 0:  # Scrolling up
                 self.wheel_scroll_locked = True
                 self.prev_month()
                 # Unlock the wheel scrolling after a delay (250ms)
-                QTimer.singleShot(250, self._unlock_wheel_scroll)
+                QTimer.singleShot(500, self._unlock_wheel_scroll)
             event.accept()
         else:
             super().wheelEvent(event)
