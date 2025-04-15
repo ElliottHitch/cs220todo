@@ -1,5 +1,5 @@
-PyQt6==6.6.1
-PyQt6-sip==13.6.0
+PyQt6
+PyQt6-sip
 pytz==2023.3
 google-api-python-client==2.107.0
 google-auth-httplib2==0.1.0

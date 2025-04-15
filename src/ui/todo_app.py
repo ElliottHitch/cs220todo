@@ -42,6 +42,9 @@ class TodoApp(QMainWindow):
         
         self.initial_load = True
         
+        # Add flag to prevent rapid month scrolling
+        self.wheel_scroll_locked = False
+        
         self.init_ui()
         
         self.worker = APIWorker(self)
@@ -1045,16 +1048,25 @@ class TodoApp(QMainWindow):
         
     def wheelEvent(self, event):
         """Handle mouse wheel events to navigate through months in monthly view."""
-        if self.current_view == "monthly":
+        if self.current_view == "monthly" and not self.wheel_scroll_locked:
             delta = event.angleDelta().y()
             if delta < 0:  # Scrolling down
+                self.wheel_scroll_locked = True
                 self.next_month()
+                # Unlock the wheel scrolling after a delay (250ms)
+                QTimer.singleShot(250, self._unlock_wheel_scroll)
             elif delta > 0:  # Scrolling up
+                self.wheel_scroll_locked = True
                 self.prev_month()
+                # Unlock the wheel scrolling after a delay (250ms)
+                QTimer.singleShot(250, self._unlock_wheel_scroll)
             event.accept()
         else:
-
             super().wheelEvent(event)
+        
+    def _unlock_wheel_scroll(self):
+        """Unlock wheel scrolling after the delay period."""
+        self.wheel_scroll_locked = False
         
     def closeEvent(self, event):
         """Handle the window close event."""
