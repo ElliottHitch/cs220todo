@@ -139,7 +139,7 @@ class TodoApp(QMainWindow):
         self.daily_view.setWidgetResizable(True)
         self.daily_content = QWidget()
         self.daily_layout = QVBoxLayout(self.daily_content)
-        self.daily_layout.setSpacing(PADDING//2)
+        self.daily_layout.setSpacing(PADDING/2)
         self.daily_layout.setContentsMargins(PADDING, PADDING, PADDING, PADDING)
         self.daily_view.setWidget(self.daily_content)
         
