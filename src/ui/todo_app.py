@@ -42,7 +42,6 @@ class TodoApp(QMainWindow):
         
         self.initial_load = True
         
-        # Add flag to prevent rapid month scrolling
         self.wheel_scroll_locked = False
         
         self.init_ui()

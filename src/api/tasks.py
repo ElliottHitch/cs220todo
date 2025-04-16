@@ -17,18 +17,7 @@ class TaskManager:
         self.fetching_ranges = set()
         
     def _create_event_like_structure(self, task_id, title, due_datetime=None, completed=False, is_all_day=False):
-        """Helper method to create a standardized event-like structure from a task.
-        
-        Args:
-            task_id: ID of the task
-            title: Title/summary of the task
-            due_datetime: Due datetime, or None if not specified
-            completed: Whether the task is completed
-            is_all_day: Whether it should be treated as an all-day event
-            
-        Returns:
-            A dictionary with event-like structure
-        """
+        """Helper method to create a standardized event-like structure from a task."""
         if due_datetime is None:
             due_datetime = datetime.datetime.now(datetime.timezone.utc)
             

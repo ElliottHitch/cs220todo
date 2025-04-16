@@ -20,13 +20,7 @@ def local_to_utc(local_dt):
     return local_dt.astimezone(timezone.utc)
 
 def format_datetime(dt, format_type='time', include_minutes=True):
-    """Format datetime according to specified format type.
-    
-    Args:
-        dt: The datetime object to format
-        format_type: One of 'time', 'weekday', 'day', 'month_year'
-        include_minutes: For 'time' format, whether to include minutes
-    """
+    """Format datetime according to specified format type."""
     if format_type == 'time':
         if include_minutes:
             return dt.strftime('%I:%M%p').lstrip('0').replace(':00', '').lower()
@@ -52,7 +46,7 @@ def format_time(dt):
     return format_datetime(dt, 'time', include_minutes=True)
 
 def format_task_time(start_dt, end_dt):
-    """Format task start and end time consistently."""
+    """Format task start and end time."""
     start_str = format_datetime(start_dt.astimezone(), 'time')
     end_str = format_datetime(end_dt.astimezone(), 'time')
     return f"{start_str}-{end_str}"

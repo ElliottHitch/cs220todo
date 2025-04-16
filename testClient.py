@@ -6,13 +6,11 @@ from src.core.models import Task
 
 def test_task_manager():
     """Test the TaskManager class functionality."""
-    # Initialize services
-    print("Initializing services...")
     auth_manager = AuthManager()
     task_manager = TaskManager(auth_manager)
-    
+
     # Fetch existing tasks
-    print("\nFetching existing tasks...")
+    print("Fetching existing tasks...")
     try:
         tasks, _ = task_manager.fetch_tasks()
         print(f"Found {len(tasks)} existing tasks")
@@ -21,7 +19,7 @@ def test_task_manager():
         if tasks:
             print("\nTask list:")
             for i, task in enumerate(tasks):
-                print(f"{i+1}. {task.get('summary', 'Untitled')} - Status: {task.get('status', 'unknown')}")
+                print(f"{i+1}. {task.get('summary', 'Untitled')}")
         else:
             print("No tasks found.")
     except Exception as e:
@@ -29,4 +27,5 @@ def test_task_manager():
 
 if __name__ == "__main__":
     print("===== TASK MANAGER TEST =====\n")
+    print(test_task_manager.__doc__)
     test_task_manager()

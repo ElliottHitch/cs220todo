@@ -11,7 +11,7 @@ class ReminderManager(QObject):
         self.reminders = []
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_reminders)
-        self.timer.start(60000)  # Check every minute
+        self.timer.start(10*60000)  # Check every 10 minutes
         
     def add_reminder(self, task):
         """Add a task to the reminder list."""
